@@ -820,105 +820,109 @@ namespace MCPForUnity.Editor
                 work = commandQueue
                     .Select(kvp => (kvp.Key, kvp.Value.commandJson, kvp.Value.tcs))
                     .ToList();
+                // Clear the queue immediately after copying
+                foreach (var item in work)
+                {
+                    commandQueue.Remove(item.id);
+                }
             }
 
             foreach (var item in work)
             {
-                string id = item.id;
-                string commandText = item.text;
-                TaskCompletionSource<string> tcs = item.tcs;
-
-                try
-                {
-                    // Special case handling
-                    if (string.IsNullOrEmpty(commandText))
-                    {
-                        var emptyResponse = new
-                        {
-                            status = "error",
-                            error = "Empty command received",
-                        };
-                        tcs.SetResult(JsonConvert.SerializeObject(emptyResponse));
-                        // Remove quickly under lock
-                        lock (lockObj) { commandQueue.Remove(id); }
-                        continue;
-                    }
-
-                    // Trim the command text to remove any whitespace
-                    commandText = commandText.Trim();
-
-                    // Non-JSON direct commands handling (like ping)
-                    if (commandText == "ping")
-                    {
-                        var pingResponse = new
-                        {
-                            status = "success",
-                            result = new { message = "pong" },
-                        };
-                        tcs.SetResult(JsonConvert.SerializeObject(pingResponse));
-                        lock (lockObj) { commandQueue.Remove(id); }
-                        continue;
-                    }
-
-                    // Check if the command is valid JSON before attempting to deserialize
-                    if (!IsValidJson(commandText))
-                    {
-                        var invalidJsonResponse = new
-                        {
-                            status = "error",
-                            error = "Invalid JSON format",
-                            receivedText = commandText.Length > 50
-                                ? commandText[..50] + "..."
-                                : commandText,
-                        };
-                        tcs.SetResult(JsonConvert.SerializeObject(invalidJsonResponse));
-                        lock (lockObj) { commandQueue.Remove(id); }
-                        continue;
-                    }
-
-                    // Normal JSON command processing
-                    Command command = JsonConvert.DeserializeObject<Command>(commandText);
-
-                    if (command == null)
-                    {
-                        var nullCommandResponse = new
-                        {
-                            status = "error",
-                            error = "Command deserialized to null",
-                            details = "The command was valid JSON but could not be deserialized to a Command object",
-                        };
-                        tcs.SetResult(JsonConvert.SerializeObject(nullCommandResponse));
-                    }
-                    else
-                    {
-                        string responseJson = ExecuteCommand(command);
-                        tcs.SetResult(responseJson);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogError($"Error processing command: {ex.Message}\n{ex.StackTrace}");
-
-                    var response = new
-                    {
-                        status = "error",
-                        error = ex.Message,
-                        commandType = "Unknown (error during processing)",
-                        receivedText = commandText?.Length > 50
-                            ? commandText[..50] + "..."
-                            : commandText,
-                    };
-                    string responseJson = JsonConvert.SerializeObject(response);
-                    tcs.SetResult(responseJson);
-                }
-
-                // Remove quickly under lock
-                lock (lockObj) { commandQueue.Remove(id); }
+                // Fire-and-forget the async handler for each command
+                _ = HandleCommandAsync(item);
             }
             }
             finally
             {
                 Interlocked.Exchange(ref processingCommands, 0);
+            }
+        }
+
+        private static async Task HandleCommandAsync((string id, string text, TaskCompletionSource<string> tcs) item)
+        {
+            string id = item.id;
+            string commandText = item.text;
+            TaskCompletionSource<string> tcs = item.tcs;
+
+            try
+            {
+                // Special case handling
+                if (string.IsNullOrEmpty(commandText))
+                {
+                    var emptyResponse = new
+                    {
+                        status = "error",
+                        error = "Empty command received",
+                    };
+                    tcs.TrySetResult(JsonConvert.SerializeObject(emptyResponse));
+                    return;
+                }
+
+                // Trim the command text to remove any whitespace
+                commandText = commandText.Trim();
+
+                // Non-JSON direct commands handling (like ping)
+                if (commandText == "ping")
+                {
+                    var pingResponse = new
+                    {
+                        status = "success",
+                        result = new { message = "pong" },
+                    };
+                    tcs.TrySetResult(JsonConvert.SerializeObject(pingResponse));
+                    return;
+                }
+
+                // Check if the command is valid JSON before attempting to deserialize
+                if (!IsValidJson(commandText))
+                {
+                    var invalidJsonResponse = new
+                    {
+                        status = "error",
+                        error = "Invalid JSON format",
+                        receivedText = commandText.Length > 50
+                            ? commandText[..50] + "..."
+                            : commandText,
+                    };
+                    tcs.TrySetResult(JsonConvert.SerializeObject(invalidJsonResponse));
+                    return;
+                }
+
+                // Normal JSON command processing
+                Command command = JsonConvert.DeserializeObject<Command>(commandText);
+
+                if (command == null)
+                {
+                    var nullCommandResponse = new
+                    {
+                        status = "error",
+                        error = "Command deserialized to null",
+                        details = "The command was valid JSON but could not be deserialized to a Command object",
+                    };
+                    tcs.TrySetResult(JsonConvert.SerializeObject(nullCommandResponse));
+                }
+                else
+                {
+                    string responseJson = await ExecuteCommandAsync(command);
+                    tcs.TrySetResult(responseJson);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error processing command: {ex.Message}\n{ex.StackTrace}");
+
+                var response = new
+                {
+                    status = "error",
+                    error = ex.Message,
+                    commandType = "Unknown (error during processing)",
+                    receivedText = commandText?.Length > 50
+                        ? commandText[..50] + "..."
+                        : commandText,
+                };
+                string responseJson = JsonConvert.SerializeObject(response);
+                tcs.TrySetResult(responseJson);
             }
         }
 
@@ -1011,7 +1015,7 @@ namespace MCPForUnity.Editor
             return false;
         }
 
-        private static string ExecuteCommand(Command command)
+        private static async Task<string> ExecuteCommandAsync(Command command)
         {
             try
             {
@@ -1041,24 +1045,48 @@ namespace MCPForUnity.Editor
                 JObject paramsObject = command.@params ?? new JObject();
 
                 // Route command based on the new tool structure from the refactor plan
-                object result = command.type switch
+                object result;
+                switch (command.type)
                 {
                     // Maps the command type (tool name) to the corresponding handler's static HandleCommand method
                     // Assumes each handler class has a static method named 'HandleCommand' that takes JObject parameters
-                    "manage_script" => ManageScript.HandleCommand(paramsObject),
+                    case "manage_script":
+                        result = ManageScript.HandleCommand(paramsObject);
+                        break;
                     // Run scene operations on the main thread to avoid deadlocks/hangs (with diagnostics under debug flag)
-                    "manage_scene" => HandleManageScene(paramsObject)
-                        ?? throw new TimeoutException($"manage_scene timed out after {FrameIOTimeoutMs} ms on main thread"),
-                    "manage_editor" => ManageEditor.HandleCommand(paramsObject),
-                    "manage_gameobject" => ManageGameObject.HandleCommand(paramsObject),
-                    "manage_asset" => ManageAsset.HandleCommand(paramsObject),
-                    "manage_shader" => ManageShader.HandleCommand(paramsObject),
-                    "read_console" => ReadConsole.HandleCommand(paramsObject),
-                    "manage_menu_item" => ManageMenuItem.HandleCommand(paramsObject),
-                    _ => throw new ArgumentException(
-                        $"Unknown or unsupported command type: {command.type}"
-                    ),
-                };
+                    case "manage_scene":
+                        result = HandleManageScene(paramsObject)
+                                 ?? throw new TimeoutException($"manage_scene timed out after {FrameIOTimeoutMs} ms on main thread");
+                        break;
+                    case "manage_editor":
+                        result = ManageEditor.HandleCommand(paramsObject);
+                        break;
+                    case "manage_gameobject":
+                        result = ManageGameObject.HandleCommand(paramsObject);
+                        break;
+                    case "manage_asset":
+                        result = ManageAsset.HandleCommand(paramsObject);
+                        break;
+                    case "manage_shader":
+                        result = ManageShader.HandleCommand(paramsObject);
+                        break;
+                    case "read_console":
+                        result = ReadConsole.HandleCommand(paramsObject);
+                        break;
+                    case "manage_menu_item":
+                        result = ManageMenuItem.HandleCommand(paramsObject);
+                        break;
+                    case "input_simulation":
+                        result = await InputSimulation.HandleCommand(paramsObject);
+                        break;
+                    case "scene_observer":
+                        result = SceneObserver.HandleCommand(paramsObject);
+                        break;
+                    default:
+                        throw new ArgumentException(
+                            $"Unknown or unsupported command type: {command.type}"
+                        );
+                }
 
                 // Standard success response format
                 var response = new { status = "success", result };

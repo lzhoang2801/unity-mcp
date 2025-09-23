@@ -161,7 +161,7 @@ register_all_tools(mcp)
 # Asset Creation Strategy
 
 
-@mcp.prompt()
+#@mcp.prompt()
 def asset_creation_strategy() -> str:
     """Guide for discovering and using MCP for Unity tools effectively."""
     return (
@@ -174,6 +174,8 @@ def asset_creation_strategy() -> str:
         "- `manage_script`: Manages C# script files.\n"
         "- `manage_asset`: Manages prefabs and assets.\n"
         "- `manage_shader`: Manages shaders.\n\n"
+        "- `input_simulation`: Simulates user actions.\n"
+        "- `scene_observer`: Observes the scene.\n\n"
         "Tips:\n"
         "- Create prefabs for reusable GameObjects.\n"
         "- Always include a camera and main light in your scenes.\n"
@@ -182,6 +184,7 @@ def asset_creation_strategy() -> str:
         "- Use `manage_menu_item` for interacting with Unity systems and third party tools like a user would.\n"
         "- List menu items before using them if you are unsure of the menu path.\n"
         "- If a menu item seems missing, refresh the cache: use manage_menu_item with action='list' and refresh=true, or action='refresh'. Avoid refreshing every time; prefer refresh only when the menu set likely changed.\n"
+        "- Use `input_simulation` and `scene_observer` for interacting with the scene in Unity Editor's Play Mode.\n"
     )
 
 

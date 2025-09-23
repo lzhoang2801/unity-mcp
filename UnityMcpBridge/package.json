@@ -7,7 +7,9 @@
   "documentationUrl": "https://github.com/CoplayDev/unity-mcp",
   "licensesUrl": "https://github.com/CoplayDev/unity-mcp/blob/main/LICENSE",
   "dependencies": {
-    "com.unity.nuget.newtonsoft-json": "3.0.2"
+    "com.unity.nuget.newtonsoft-json": "3.0.2",
+    "com.unity.inputsystem": "1.14.2",
+    "com.unity.textmeshpro": "3.0.6"
   },
   "keywords": [
     "unity",
