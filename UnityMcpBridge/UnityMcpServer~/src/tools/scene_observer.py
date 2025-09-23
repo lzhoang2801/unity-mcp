@@ -9,7 +9,6 @@ def register_scene_observer_tools(mcp: FastMCP):
     def scene_observer(ctx: Context) -> Dict[str, Any]:
         """
         Retrieves the current Unity game scene during Play Mode to help the AI agent "see" and understand all visible UI elements and interactive objects.
-        Use this before taking any action to ensure you have the most up-to-date and complete view of what is on screen.
 
         Returns:
           A dictionary with the operation results ('success', 'message', 'data').

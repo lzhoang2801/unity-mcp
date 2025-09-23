@@ -5,7 +5,7 @@ using UnityEngine.SceneManagement;
 using System.Collections.Generic;
 using System.Linq;
 using System;
-using System.Reflection;
+using System.Text;
 using TMPro;
 using SceneObserverData;
 using UnityEditor;
@@ -14,13 +14,6 @@ using MCPForUnity.Editor.Helpers;
 
 namespace SceneObserverData
 {
-    [Serializable]
-    public class BlockerInfo
-    {
-        public int id;
-        public string name;
-    }
-
     [Serializable]
     public class SummaryInfo
     {
@@ -37,13 +30,13 @@ namespace SceneObserverData
         public string path;
         public string actionType;
         public bool isInteractable;
-        public bool isBlocked;
-        public bool isParentBlocked;
-        public List<BlockerInfo> blockedBy = new List<BlockerInfo>();
         public List<SummaryInfo> summary = new List<SummaryInfo>();
         public List<SceneElement> childElements = new List<SceneElement>();
 
         [NonSerialized] public GameObject gameObject;
+        
+        [NonSerialized] public int interactiveDescendantCount;
+        [NonSerialized] public SceneElement singleInteractiveDescendant;
     }
 
     [Serializable]
@@ -74,32 +67,6 @@ namespace MCPForUnity.Editor.Tools
     /// </summary>
     public class SceneObserver : MonoBehaviour
     {
-        private List<GraphicRaycaster> raycasters = new List<GraphicRaycaster>();
-        private PointerEventData pointerEventData;
-        private EventSystem eventSystem;
-
-        private class BlockingRect
-        {
-            public Rect rect;
-            public GameObject go;
-        }
-        
-        private readonly List<BlockingRect> _topBlockingRects = new List<BlockingRect>();
-        private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>();
-        private Dictionary<GameObject, SceneElement> _elementMap;
-        
-        private int _topBlockingOrder = int.MinValue;
-        
-        void Awake()
-        {
-            eventSystem = EventSystem.current;
-            if (eventSystem == null)
-            {
-                eventSystem = new GameObject("EventSystem").AddComponent<EventSystem>();
-            }
-            pointerEventData = new PointerEventData(eventSystem);
-        }
-        
         public static object HandleCommand(JObject @params)
         {
             if (!EditorApplication.isPlaying)
@@ -119,31 +86,17 @@ namespace MCPForUnity.Editor.Tools
 
         public static SceneState GetSceneState()
         {
-            var elementMap = new Dictionary<GameObject, SceneElement>();
-            var raycasters = new List<GraphicRaycaster>();
-            var topBlockingRects = new List<BlockingRect>();
-            var raycastResults = new List<RaycastResult>();
-            var topBlockingOrder = int.MinValue;
-            
             var rootElements = new List<SceneElement>();
             var rootObjects = SceneManager.GetActiveScene().GetRootGameObjects();
+            var pathBuilder = new StringBuilder();
+
             foreach (var rootGo in rootObjects)
             {
                 if (rootGo.activeInHierarchy)
                 {
-                    rootElements.Add(BuildFullTreeRecursively(rootGo.transform, null, elementMap, raycasters));
+                    rootElements.AddRange(ProcessNodeRecursively(rootGo.transform, pathBuilder));
                 }
             }
-
-            raycasters = raycasters.OrderByDescending(r => r.GetComponent<Canvas>().sortingOrder).ToList();
-            BuildTopBlockingRects(raycasters, topBlockingRects, ref topBlockingOrder);
-
-            foreach (var rootElement in rootElements)
-            {
-                ProcessNodeHierarchy(rootElement, null, "", elementMap, raycasters, topBlockingRects, raycastResults);
-            }
-            
-            rootElements = PruneAndFlattenHierarchy(rootElements);
             
             var currentState = new SceneState();
             var nodesGroupedByLayer = rootElements
@@ -171,52 +124,124 @@ namespace MCPForUnity.Editor.Tools
             return currentState;
         }
         
-        private static SceneElement BuildFullTreeRecursively(Transform nodeTransform, SceneElement parentElement, Dictionary<GameObject, SceneElement> elementMap, List<GraphicRaycaster> raycasters)
+        private static List<SceneElement> ProcessNodeRecursively(Transform nodeTransform, StringBuilder pathBuilder)
         {
-            var go = nodeTransform.gameObject;
-            var element = new SceneElement
-            {
-                name = go.name,
-                gameObject = go,
-            };
-            elementMap[go] = element;
+            int originalLength = pathBuilder.Length;
+            pathBuilder.Append("/").Append(nodeTransform.name);
+            string currentPath = pathBuilder.ToString();
 
-            if (parentElement != null)
-            {
-                parentElement.childElements.Add(element);
-            }
-
-            if (go.TryGetComponent<GraphicRaycaster>(out var raycaster))
-            {
-                raycasters.Add(raycaster);
-            }
-            
-            var interactiveComponent = FindInteractiveComponent(go);
-        if (interactiveComponent != null)
-        {
-            bool isInteractable = true;
-            if (interactiveComponent is Selectable selectable)
-            {
-                isInteractable = selectable.IsInteractable();
-            }
-            else if (interactiveComponent is Behaviour behaviour)
-            {
-                isInteractable = behaviour.enabled;
-            }
-            
-            element.id = interactiveComponent.GetInstanceID();
-            element.isInteractable = isInteractable;
-            element.actionType = interactiveComponent.GetType().Name;
-        }
-            
+            var processedChildren = new List<SceneElement>();
             foreach (Transform childTransform in nodeTransform)
             {
                 if (childTransform.gameObject.activeInHierarchy)
                 {
-                    BuildFullTreeRecursively(childTransform, element, elementMap, raycasters);
+                    processedChildren.AddRange(ProcessNodeRecursively(childTransform, pathBuilder));
                 }
             }
-            return element;
+            
+            pathBuilder.Length = originalLength;
+
+            var go = nodeTransform.gameObject;
+            var element = new SceneElement
+            {
+                id = go.GetInstanceID(),
+                name = go.name,
+                path = currentPath,
+                gameObject = go
+            };
+
+            var interactiveComponent = FindInteractiveComponent(go);
+            if (interactiveComponent != null)
+            {
+                PopulateInteractiveProperties(element, interactiveComponent);
+            }
+
+            if (go.TryGetComponent<Text>(out var text) && !string.IsNullOrWhiteSpace(text.text))
+            {
+                element.summary.Add(new SummaryInfo { type = "text", value = text.text.Trim(), sourceNodeName = go.name });
+            }
+            else if (go.TryGetComponent<TextMeshProUGUI>(out var tmp) && !string.IsNullOrWhiteSpace(tmp.text))
+            {
+                element.summary.Add(new SummaryInfo { type = "text", value = tmp.text.Trim(), sourceNodeName = go.name });
+            }
+            else if (go.TryGetComponent<Image>(out var image) && image.sprite != null)
+            {
+                element.summary.Add(new SummaryInfo { type = "image", value = image.sprite.name, sourceNodeName = go.name });
+            }
+
+            bool isSelfInteractive = !string.IsNullOrEmpty(element.actionType);
+            if (isSelfInteractive)
+            {
+                element.interactiveDescendantCount = 1;
+                element.singleInteractiveDescendant = element;
+            }
+            else
+            {
+                element.interactiveDescendantCount = 0;
+                foreach (var child in processedChildren)
+                {
+                    element.interactiveDescendantCount += child.interactiveDescendantCount;
+                    if (child.interactiveDescendantCount == 1)
+                    {
+                        element.singleInteractiveDescendant = (element.singleInteractiveDescendant == null) ? child.singleInteractiveDescendant : null;
+                    }
+                    else if (child.interactiveDescendantCount > 1)
+                    {
+                        element.singleInteractiveDescendant = null;
+                    }
+                }
+            }
+
+            var finalChildren = new List<SceneElement>();
+            foreach (var child in processedChildren)
+            {
+                bool isContextNode = string.IsNullOrEmpty(child.actionType) && 
+                                    child.interactiveDescendantCount == 0 && 
+                                    child.summary.Count > 0;
+
+                if (isContextNode)
+                {
+                    element.summary.AddRange(child.summary);
+                }
+                else
+                {
+                    finalChildren.Add(child);
+                }
+            }
+
+            if (!isSelfInteractive && element.interactiveDescendantCount == 1 && element.singleInteractiveDescendant != null)
+            {
+                var nodeToMerge = element.singleInteractiveDescendant;
+                element.id = nodeToMerge.id;
+                element.actionType = nodeToMerge.actionType;
+                element.isInteractable = nodeToMerge.isInteractable;
+                
+                var directChildContainer = finalChildren.FirstOrDefault(c => c.singleInteractiveDescendant == nodeToMerge || c == nodeToMerge);
+                if (directChildContainer != null)
+                {
+                    element.summary.AddRange(directChildContainer.summary);
+                }
+
+                finalChildren.Clear();
+            }
+
+            bool isNowInteractive = !string.IsNullOrEmpty(element.actionType);
+            bool hasSummary = element.summary.Count > 0;
+            bool isScrollRect = element.actionType == "ScrollRect";
+
+            if (isNowInteractive || hasSummary || isScrollRect)
+            {
+                element.childElements = finalChildren;
+                if (isNowInteractive && !isScrollRect)
+                {
+                    element.childElements.Clear();
+                }
+                return new List<SceneElement> { element };
+            }
+            else
+            {
+                return finalChildren;
+            }
         }
 
         private static Component FindInteractiveComponent(GameObject go)
@@ -227,213 +252,6 @@ namespace MCPForUnity.Editor.Tools
             if (go.TryGetComponent<TapableBehaviour>(out var tapableBehaviour)) return tapableBehaviour;
                     
             return null;
-        }
-        
-        private static List<SceneElement> PruneAndFlattenHierarchy(List<SceneElement> elements)
-        {
-            var resultElements = new List<SceneElement>();
-            foreach (var element in elements)
-            {
-                element.childElements = PruneAndFlattenHierarchy(element.childElements);
-
-                bool isInteractive = !string.IsNullOrEmpty(element.actionType);
-                bool isScrollRect = element.actionType == "ScrollRect";
-
-                if (isInteractive && !isScrollRect)
-                {
-                    element.childElements.Clear();
-                    resultElements.Add(element);
-                }
-                else
-                {
-                    bool hasSummary = element.summary.Any();
-                    bool isBlockSource = element.isBlocked;
-
-                    if (hasSummary || isBlockSource || isScrollRect)
-                    {
-                        resultElements.Add(element);
-                    }
-                    else
-                    {
-                        resultElements.AddRange(element.childElements);
-                    }
-                }
-            }
-            return resultElements;
-        }
-
-        private static void ProcessNodeHierarchy(SceneElement element, SceneElement parentElement, string currentPath, Dictionary<GameObject, SceneElement> elementMap, List<GraphicRaycaster> raycasters, List<BlockingRect> topBlockingRects, List<RaycastResult> raycastResults)
-        {
-            element.path = currentPath + "/" + element.name;
-
-            SummarizeChildren(element.gameObject, element, elementMap);
-
-            CheckIfBlocked(element, element.gameObject, raycasters, topBlockingRects, raycastResults);
-            if (parentElement != null && (parentElement.isBlocked || parentElement.isParentBlocked))
-            {
-                element.isParentBlocked = true;
-                element.isBlocked = false;
-                element.blockedBy.Clear();
-            }
-
-            foreach (var child in element.childElements)
-            {
-                ProcessNodeHierarchy(child, element, element.path, elementMap, raycasters, topBlockingRects, raycastResults);
-            }
-        }
-
-        private static void SummarizeChildren(GameObject parentGo, SceneElement parentElement, Dictionary<GameObject, SceneElement> elementMap)
-        {
-            bool isParentInteractive = !string.IsNullOrEmpty(parentElement.actionType);
-
-            foreach (Transform childTransform in parentGo.transform)
-            {
-                var childGo = childTransform.gameObject;
-                if (!childGo.activeInHierarchy) continue;
-
-                if (elementMap.TryGetValue(childGo, out var childElement) && !string.IsNullOrEmpty(childElement.actionType))
-                {
-                    continue;
-                }
-
-                if (childTransform.TryGetComponent<Text>(out var text) && !string.IsNullOrWhiteSpace(text.text))
-                {
-                    parentElement.summary.Add(new SummaryInfo { type = "text", value = text.text.Trim(), sourceNodeName = childGo.name });
-                }
-                else if (childTransform.TryGetComponent<TextMeshProUGUI>(out var tmp) && !string.IsNullOrWhiteSpace(tmp.text))
-                {
-                    parentElement.summary.Add(new SummaryInfo { type = "text", value = tmp.text.Trim(), sourceNodeName = childGo.name });
-                }
-                else if (childTransform.TryGetComponent<Image>(out var image) && image.sprite != null)
-                {
-                    parentElement.summary.Add(new SummaryInfo { type = "image", value = image.sprite.name, sourceNodeName = childGo.name });
-                }
-
-                if (isParentInteractive && parentGo.GetComponent<ScrollRect>() == null)
-                {
-                    SummarizeChildren(childGo, parentElement, elementMap);
-                }
-            }
-        }
-        
-        private static void BuildTopBlockingRects(List<GraphicRaycaster> raycasters, List<BlockingRect> topBlockingRects, ref int topBlockingOrder)
-        {
-            topBlockingRects.Clear();
-            topBlockingOrder = int.MinValue;
-
-            var topCanvas = raycasters.Select(r => r.GetComponent<Canvas>()).FirstOrDefault();
-            if (topCanvas == null) return;
-
-            var blockingGraphics = topCanvas.GetComponentsInChildren<MaskableGraphic>(true)
-                .Where(g => g.raycastTarget && g.isActiveAndEnabled);
-
-            bool addedAny = false;
-            Camera cam = topCanvas.worldCamera;
-
-            foreach (var graphic in blockingGraphics)
-            {
-                var rt = graphic.rectTransform;
-                Vector3[] wc = new Vector3[4];
-                rt.GetWorldCorners(wc);
-                
-                var sp0 = RectTransformUtility.WorldToScreenPoint(cam, wc[0]);
-                var sp2 = RectTransformUtility.WorldToScreenPoint(cam, wc[2]);
-                var rect = new Rect(sp0.x, sp0.y, sp2.x - sp0.x, sp2.y - sp0.y);
-
-                if (rect.width > 0 && rect.height > 0)
-                {
-                    topBlockingRects.Add(new BlockingRect { rect = rect, go = topCanvas.gameObject });
-                    addedAny = true;
-                }
-            }
-
-            if (addedAny)
-            {
-                topBlockingOrder = topCanvas.sortingOrder;
-            }
-        }
-
-        private static void CheckIfBlocked(SceneElement element, GameObject go, List<GraphicRaycaster> raycasters, List<BlockingRect> topBlockingRects, List<RaycastResult> raycastResults)
-        {
-            Vector3 centerWorld;
-            Camera cameraForRaycast;
-
-            var rectTransform = go.GetComponent<RectTransform>();
-            if (rectTransform != null)
-            {
-                Vector3[] corners = new Vector3[4];
-                rectTransform.GetWorldCorners(corners);
-                centerWorld = (corners[0] + corners[2]) / 2;
-                var canvas = go.GetComponentInParent<Canvas>();
-                cameraForRaycast = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
-            }
-            else
-            {
-                cameraForRaycast = Camera.main;
-                var rend = go.GetComponent<Renderer>();
-                if (rend != null)
-                {
-                    centerWorld = rend.bounds.center;
-                }
-                else
-                {
-                    var col = go.GetComponent<Collider>();
-                    centerWorld = col != null ? col.bounds.center : go.transform.position;
-                }
-            }
-
-            if (cameraForRaycast == null && go.GetComponentInParent<Canvas>()?.renderMode != RenderMode.ScreenSpaceOverlay)
-            {
-                element.isBlocked = false;
-                return;
-            }
-            Vector2 screenPoint = cameraForRaycast != null ? cameraForRaycast.WorldToScreenPoint(centerWorld) : new Vector2(centerWorld.x, centerWorld.y);
-
-            var eventSystem = EventSystem.current;
-            if (eventSystem == null)
-            {
-                element.isBlocked = false;
-                return;
-            }
-            
-            var pointerEventData = new PointerEventData(eventSystem);
-            pointerEventData.position = screenPoint;
-            raycastResults.Clear();
-            foreach (var raycaster in raycasters)
-            {
-                raycaster.Raycast(pointerEventData, raycastResults);
-                if (raycastResults.Count > 0)
-                {
-                    var topHitUI = raycastResults[0].gameObject;
-                    if (topHitUI != go && !topHitUI.transform.IsChildOf(go.transform) && !go.transform.IsChildOf(topHitUI.transform))
-                    {
-                        element.isBlocked = true;
-                        var blockerCanvas = topHitUI.GetComponentInParent<Canvas>();
-                        var blockerGo = blockerCanvas != null ? blockerCanvas.gameObject : topHitUI;
-                        element.blockedBy.Add(new BlockerInfo { id = blockerGo.GetInstanceID(), name = blockerGo.name });
-                        return;
-                    }
-                    break;
-                }
-            }
-
-            if (rectTransform == null && cameraForRaycast != null && !string.IsNullOrEmpty(element.actionType))
-            {
-                Ray ray = cameraForRaycast.ScreenPointToRay(screenPoint);
-                if (Physics.Raycast(ray, out RaycastHit hitInfo, cameraForRaycast.farClipPlane))
-                {
-                    GameObject hitObject = hitInfo.collider.gameObject;
-                    if (hitObject != go && !hitObject.transform.IsChildOf(go.transform) && !go.transform.IsChildOf(hitObject.transform))
-                    {
-                        element.isBlocked = true;
-                        element.blockedBy.Add(new BlockerInfo { id = hitObject.GetInstanceID(), name = hitObject.name });
-                        return;
-                    }
-                }
-            }
-            
-            element.isBlocked = false;
-            element.blockedBy.Clear();
         }
         
         private static int GetSortOrder(Transform target)
@@ -453,14 +271,20 @@ namespace MCPForUnity.Editor.Tools
             return 0;
         }
 
-        private static GameObject FindLogicalRoot(GameObject startObject)
+        private static void PopulateInteractiveProperties(SceneElement element, Component interactiveComponent)
         {
-            Transform current = startObject.transform;
-            while (current.parent != null && current.parent.name.EndsWith("Button", StringComparison.OrdinalIgnoreCase))
+            bool isInteractable = true;
+            if (interactiveComponent is Selectable selectable)
             {
-                current = current.parent;
+                isInteractable = selectable.IsInteractable();
             }
-            return current.gameObject;
+            else if (interactiveComponent is Behaviour behaviour)
+            {
+                isInteractable = behaviour.enabled;
+            }
+            
+            element.isInteractable = isInteractable;
+            element.actionType = interactiveComponent.GetType().Name;
         }
     }
 }
