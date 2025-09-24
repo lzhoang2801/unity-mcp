@@ -39,6 +39,15 @@ namespace MCPForUnity.Editor.Tools
                         int clickCount = @params["clickCount"]?.ToObject<int>() ?? 1;
 
                         var validationResult = InputSimulationManager.Instance.ValidateActionTarget("click", instanceId, x, y);
+                        if (!validationResult.IsValid && validationResult.ErrorCode == "TargetOutOfViewport")
+                        {
+                            bool broughtIntoView = await InputSimulationManager.Instance.BringTargetIntoView(validationResult.Target);
+                            if (broughtIntoView)
+                            {
+                                await Task.Delay(100);
+                                validationResult = InputSimulationManager.Instance.ValidateActionTarget("click", instanceId, null, null);
+                            }
+                        }
 
                         if (!validationResult.IsValid)
                         {
@@ -68,6 +77,16 @@ namespace MCPForUnity.Editor.Tools
                         int instanceId = @params["instanceID"]?.ToObject<int>() ?? 0;
 
                         var validationResult = InputSimulationManager.Instance.ValidateActionTarget("drag", instanceId, sx, sy, ex, ey);
+
+                        if (!validationResult.IsValid && validationResult.ErrorCode == "TargetOutOfViewport")
+                        {
+                            bool broughtIntoView = await InputSimulationManager.Instance.BringTargetIntoView(validationResult.Target);
+                            if (broughtIntoView)
+                            {
+                                await Task.Delay(100);
+                                validationResult = InputSimulationManager.Instance.ValidateActionTarget("drag", instanceId, null, null, ex, ey);
+                            }
+                        }
 
                         if (!validationResult.IsValid)
                         {

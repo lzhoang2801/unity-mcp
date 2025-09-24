@@ -6,15 +6,12 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.UI;
-using System.Collections.Generic;
 using System.Linq;
 using MCPForUnity.Runtime.InputSimulation.CustomActionHandlers;
+using UnityEngine.UI;
 
 namespace MCPForUnity.Runtime.InputSimulation
 {
-    /// <summary>
-    /// Central coordinator for AI interaction with the Unity Editor's UI.
-    /// </summary>
     public sealed class InputSimulationManager : MonoBehaviour
     {
         private static InputSimulationManager _instance;
@@ -305,12 +302,12 @@ namespace MCPForUnity.Runtime.InputSimulation
                 }
                 else if (!GetScreenPositionForTarget(target, out position))
                 {
-                    return new ActionValidationResult { ErrorCode = "CannotDeterminePosition", Message = $"Could not determine screen position for '{target.name}'." };
+                    return new ActionValidationResult { ErrorCode = "CannotDeterminePosition", Message = $"Could not determine screen position for '{target.name}'.", Target = target };
                 }
 
                 if (!IsPositionInViewport(position))
                 {
-                    return new ActionValidationResult { ErrorCode = "TargetOutOfViewport", Message = $"Target '{target.name}' is outside the screen's viewport.", Position = position };
+                    return new ActionValidationResult { ErrorCode = "TargetOutOfViewport", Message = $"Target '{target.name}' is outside the screen's viewport.", Position = position, Target = target };
                 }
 
                 if (!VerifyInteractableTargetAtPosition(position, target))
@@ -319,7 +316,7 @@ namespace MCPForUnity.Runtime.InputSimulation
                     var message = blockers.Count > 0
                         ? $"Target is occluded by: {string.Join(", ", blockers)}."
                         : "Target is not the primary interactable object at its screen position.";
-                    return new ActionValidationResult { ErrorCode = "TargetNotInteractable", Message = message };
+                    return new ActionValidationResult { ErrorCode = "TargetNotInteractable", Message = message, Target = target };
                 }
             }
             else
@@ -363,6 +360,19 @@ namespace MCPForUnity.Runtime.InputSimulation
             return result;
         }
 
+        public async Task<bool> BringTargetIntoView(GameObject target)
+        {
+            if (target == null) return false;
+
+            var viewHandler = target.GetComponentInParent<IViewPortHandler>();
+            if (viewHandler == null)
+            {
+                return false;
+            }
+
+            return await viewHandler.BringIntoView(target);
+        }
+
         public async Task ClickAt(GameObject target, Vector2 screenPosition, int clickCount = 1)
         {
             EnsureReady();
@@ -389,6 +399,7 @@ namespace MCPForUnity.Runtime.InputSimulation
                     await Task.Delay(100);
                     _input.LeftButtonRelease();
                 }
+                else
                 {
                     _legacyInput.Click(target, screenPosition);
                 }
