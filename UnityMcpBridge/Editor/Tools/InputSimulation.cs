@@ -1,11 +1,11 @@
 using System;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
-using UnityEngine;
-using UnityEngine.InputSystem;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Runtime.InputSimulation;
 using System.Threading.Tasks;
+using MCPForUnity.Editor.Models;
+using UnityEngine;
 
 namespace MCPForUnity.Editor.Tools
 {
@@ -18,88 +18,57 @@ namespace MCPForUnity.Editor.Tools
         {
             if (!EditorApplication.isPlaying)
             {
-                return Response.Error("NotInPlayMode", new { message = "Input simulation requires Play Mode." });
+                return Response.Error(InputSimulationConstants.ErrorCodeNotInPlayMode, new { message = "Input simulation requires Play Mode." });
             }
 
-            string action = @params["action"]?.ToString();
-            if (string.IsNullOrEmpty(action))
+            var command = InputCommand.FromJObject(@params);
+            
+            if (string.IsNullOrEmpty(command.Action))
             {
-                return Response.Error("MissingAction", new { message = "'action' is required" });
+                return Response.Error(InputSimulationConstants.ErrorCodeMissingAction, new { message = "'action' is required" });
             }
 
             try
             {
-                switch (action.ToLowerInvariant())
+                var mgr = InputSimulationManager.Instance;
+                
+                string lowerAction = command.Action.ToLowerInvariant();
+                
+                var startPos = command.StartPosition;
+                if (lowerAction == InputSimulationConstants.ActionScroll && command.InstanceID == 0 && !startPos.HasValue)
                 {
-                    case "click":
-                    {
-                        float? x = @params["x"]?.ToObject<float?>();
-                        float? y = @params["y"]?.ToObject<float?>();
-                        int instanceId = @params["instanceID"]?.ToObject<int>() ?? 0;
-                        int clickCount = @params["clickCount"]?.ToObject<int>() ?? 1;
+                    startPos = mgr.GetCursorPosition();
+                }
 
-                        var validationResult = InputSimulationManager.Instance.ValidateActionTarget("click", instanceId, x, y);
-                        if (!validationResult.IsValid && validationResult.ErrorCode == "TargetOutOfViewport")
-                        {
-                            bool broughtIntoView = await InputSimulationManager.Instance.BringTargetIntoView(validationResult.Target);
-                            if (broughtIntoView)
-                            {
-                                await Task.Delay(100);
-                                validationResult = InputSimulationManager.Instance.ValidateActionTarget("click", instanceId, null, null);
-                            }
-                        }
+                float? x2 = lowerAction == InputSimulationConstants.ActionDrag ? command.EndPosition?.x : (lowerAction == InputSimulationConstants.ActionScroll ? command.Delta?.x : null);
+                float? y2 = lowerAction == InputSimulationConstants.ActionDrag ? command.EndPosition?.y : (lowerAction == InputSimulationConstants.ActionScroll ? command.Delta?.y : null);
 
-                        if (!validationResult.IsValid)
-                        {
-                            return Response.Error(validationResult.ErrorCode, new {
-                                message = validationResult.Message,
-                                x = validationResult.Position.x,
-                                y = validationResult.Position.y,
-                                target = validationResult.Target?.name
-                            });
-                        }
+                var validationResult = await mgr.ResolveAndPrepareTarget(
+                    command.Action, command.InstanceID, startPos?.x, startPos?.y, x2, y2);
 
-                        await InputSimulationManager.Instance.ClickAt(validationResult.Target, validationResult.Position, clickCount);
-                        
+                if (!validationResult.IsValid)
+                {
+                    return Response.Error(validationResult.ErrorCode, new {
+                        message = validationResult.Message,
+                        x = validationResult.Position.x,
+                        y = validationResult.Position.y,
+                        target = validationResult.Target?.name
+                    });
+                }
+                
+                switch (lowerAction)
+                {
+                    case InputSimulationConstants.ActionClick:
+                        await mgr.ClickAt(validationResult.Target, validationResult.Position, command.ClickCount);
                         return Response.Success("Click completed", new {
                             x = validationResult.Position.x,
                             y = validationResult.Position.y,
                             target = validationResult.Target?.name,
-                            clickCount
+                            command.ClickCount
                         });
-                    }
-                    case "drag":
-                    {
-                        float? sx = @params["sx"]?.ToObject<float?>();
-                        float? sy = @params["sy"]?.ToObject<float?>();
-                        float? ex = @params["ex"]?.ToObject<float?>();
-                        float? ey = @params["ey"]?.ToObject<float?>();
-                        int instanceId = @params["instanceID"]?.ToObject<int>() ?? 0;
 
-                        var validationResult = InputSimulationManager.Instance.ValidateActionTarget("drag", instanceId, sx, sy, ex, ey);
-
-                        if (!validationResult.IsValid && validationResult.ErrorCode == "TargetOutOfViewport")
-                        {
-                            bool broughtIntoView = await InputSimulationManager.Instance.BringTargetIntoView(validationResult.Target);
-                            if (broughtIntoView)
-                            {
-                                await Task.Delay(100);
-                                validationResult = InputSimulationManager.Instance.ValidateActionTarget("drag", instanceId, null, null, ex, ey);
-                            }
-                        }
-
-                        if (!validationResult.IsValid)
-                        {
-                            return Response.Error(validationResult.ErrorCode, new {
-                                message = validationResult.Message,
-                                sx = validationResult.Position.x,
-                                sy = validationResult.Position.y,
-                                target = validationResult.Target?.name
-                            });
-                        }
-
-                        await InputSimulationManager.Instance.DragTo(validationResult.Target, validationResult.Position, validationResult.EndPosition);
-
+                    case InputSimulationConstants.ActionDrag:
+                        await mgr.DragTo(validationResult.Target, validationResult.Position, validationResult.EndPosition);
                         return Response.Success("Drag completed", new { 
                             sx = validationResult.Position.x,
                             sy = validationResult.Position.y,
@@ -107,51 +76,24 @@ namespace MCPForUnity.Editor.Tools
                             ey = validationResult.EndPosition.y,
                             target = validationResult.Target?.name
                         });
-                    }
-                    case "scroll":
-                    {
-                        float? x = @params["x"]?.ToObject<float?>();
-                        float? y = @params["y"]?.ToObject<float?>();
-                        int instanceId = @params["instanceID"]?.ToObject<int>() ?? 0;
-                        float dx = @params["dx"]?.ToObject<float>() ?? 0f;
-                        float dy = @params["dy"]?.ToObject<float>() ?? 0f;
 
-                        if (instanceId == 0 && !x.HasValue && !y.HasValue)
-                        {
-                            var cursorPos = InputSimulationManager.Instance.GetCursorPosition();
-                            x = cursorPos.x;
-                            y = cursorPos.y;
-                        }
-
-                        var validationResult = InputSimulationManager.Instance.ValidateActionTarget("scroll", instanceId, x, y, dx, dy);
-                        
-                        if (!validationResult.IsValid)
-                        {
-                            return Response.Error(validationResult.ErrorCode, new {
-                                message = validationResult.Message,
-                                x = validationResult.Position.x,
-                                y = validationResult.Position.y,
-                                target = validationResult.Target?.name
-                            });
-                        }
-
-                        await InputSimulationManager.Instance.Scroll(validationResult.Position, validationResult.ScrollDelta);
-
+                    case InputSimulationConstants.ActionScroll:
+                        await mgr.Scroll(validationResult.Position, validationResult.ScrollDelta);
                         return Response.Success("Scroll completed", new {
                             x = validationResult.Position.x,
                             y = validationResult.Position.y,
-                            dx,
-                            dy,
+                            dx = command.Delta?.x ?? 0f,
+                            dy = command.Delta?.y ?? 0f,
                             target = validationResult.Target?.name
                         });
-                    }
+
                     default:
-                        return Response.Error("UnknownAction", new { action });
+                        return Response.Error(InputSimulationConstants.ErrorCodeUnknownAction, new { command.Action });
                 }
             }
             catch (Exception ex)
             {
-                return Response.Error("Exception", new { message = ex.Message, stack = ex.StackTrace });
+                return Response.Error(InputSimulationConstants.ErrorCodeException, new { message = ex.Message, stack = ex.StackTrace });
             }
         }
     }

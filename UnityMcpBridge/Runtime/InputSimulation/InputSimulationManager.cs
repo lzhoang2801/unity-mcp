@@ -35,6 +35,8 @@ namespace MCPForUnity.Runtime.InputSimulation
         private bool isInputSystemUIModuleActive;
         private List<ICustomActionHandler> _customActionHandlers;
 
+		private const float ScrollSpeed = 2000f;
+
         private void Awake()
         {
             if (_instance != null && _instance != this)
@@ -88,6 +90,27 @@ namespace MCPForUnity.Runtime.InputSimulation
             {
                 new ComponentMethodHandler("TapableBehaviour", "OnTapped", "click")
             };
+        }
+
+        private List<RaycastResult> RaycastUI(Vector2 position)
+        {
+            if (EventSystem.current == null) return new List<RaycastResult>();
+        
+            var pointerData = new PointerEventData(EventSystem.current) { position = position };
+            var results = new List<RaycastResult>();
+            EventSystem.current.RaycastAll(pointerData, results);
+            return results;
+        }
+
+        private RaycastHit[] RaycastPhysics(Vector2 position)
+        {
+            var mainCamera = Camera.main;
+            if (mainCamera == null) return Array.Empty<RaycastHit>();
+        
+            Ray ray = mainCamera.ScreenPointToRay(position);
+            var hits = Physics.RaycastAll(ray);
+            Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            return hits;
         }
 
         public Vector2 GetCursorPosition()
@@ -156,53 +179,19 @@ namespace MCPForUnity.Runtime.InputSimulation
 
         public GameObject GetInteractableObjectAtPosition(Vector2 screenPosition)
         {
-            if (EventSystem.current != null)
+            var uiResults = RaycastUI(screenPosition);
+            if (uiResults.Count > 0 && uiResults[0].gameObject != null)
             {
-            var pointerData = new PointerEventData(EventSystem.current) { position = screenPosition };
-            var results = new List<RaycastResult>();
-            EventSystem.current.RaycastAll(pointerData, results);
-
-                if (results.Count > 0 && results[0].gameObject != null)
-                {
-                    return results[0].gameObject;
-                }
+                return uiResults[0].gameObject;
             }
 
-            var mainCamera = Camera.main;
-            if (mainCamera == null)
+            var physicsHits = RaycastPhysics(screenPosition);
+            if (physicsHits.Length > 0)
             {
-                return null;
-            }
-            
-            Ray ray = mainCamera.ScreenPointToRay(screenPosition);
-            if (Physics.Raycast(ray, out RaycastHit hit))
-            {
-                return hit.collider.gameObject;
+                return physicsHits[0].collider.gameObject;
             }
 
             return null;
-        }
-
-        public bool VerifyInteractableTargetAtPosition(Vector2 screenPosition, GameObject expected)
-        {
-            var topObject = GetInteractableObjectAtPosition(screenPosition);
-
-            if (topObject == null)
-            {
-                return false;
-            }
-
-            var current = topObject.transform;
-            while (current != null)
-            {
-                if (current.gameObject == expected)
-                {
-                    return true;
-                }
-                current = current.parent;
-            }
-
-            return false;
         }
 
         public List<string> GetBlockingObjectNames(Vector2 screenPosition, GameObject expectedTarget)
@@ -210,48 +199,35 @@ namespace MCPForUnity.Runtime.InputSimulation
             var blockingObjects = new List<string>();
             var uniqueBlockingNames = new HashSet<string>();
 
-            if (EventSystem.current != null)
+            var uiResults = RaycastUI(screenPosition);
+            foreach (var result in uiResults)
             {
-            var pointerData = new PointerEventData(EventSystem.current) { position = screenPosition };
-            var results = new List<RaycastResult>();
-            EventSystem.current.RaycastAll(pointerData, results);
-
-                foreach (var result in results)
+                if (result.gameObject == null) continue;
+                    
+                if (IsTargetOrChild(result.gameObject, expectedTarget))
                 {
-                    if (result.gameObject == null) continue;
+                    return blockingObjects;
+                }
                     
-                    if (IsTargetOrChild(result.gameObject, expectedTarget))
-                    {
-                        return blockingObjects;
-                    }
-                    
-                    if (uniqueBlockingNames.Add(result.gameObject.name))
-                    {
-                        blockingObjects.Add(result.gameObject.name);
-                    }
+                if (uniqueBlockingNames.Add(result.gameObject.name))
+                {
+                    blockingObjects.Add(result.gameObject.name);
                 }
             }
 
-            var mainCamera = Camera.main;
-            if (mainCamera != null)
+            var physicsHits = RaycastPhysics(screenPosition);
+            foreach (var hit in physicsHits)
             {
-                Ray ray = mainCamera.ScreenPointToRay(screenPosition);
-                var hits = Physics.RaycastAll(ray);
-                Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-
-                foreach (var hit in hits)
-                {
-                    if (hit.collider.gameObject == null) continue;
+                if (hit.collider.gameObject == null) continue;
                     
-                    if (IsTargetOrChild(hit.collider.gameObject, expectedTarget))
-                    {
-                        return blockingObjects;
-                    }
+                if (IsTargetOrChild(hit.collider.gameObject, expectedTarget))
+                {
+                    return blockingObjects;
+                }
 
-                    if (uniqueBlockingNames.Add(hit.collider.gameObject.name))
-                    {
-                        blockingObjects.Add(hit.collider.gameObject.name);
-                    }
+                if (uniqueBlockingNames.Add(hit.collider.gameObject.name))
+                {
+                    blockingObjects.Add(hit.collider.gameObject.name);
                 }
             }
             
@@ -283,94 +259,134 @@ namespace MCPForUnity.Runtime.InputSimulation
             public GameObject Target;
         }
 
-        public ActionValidationResult ValidateActionTarget(string action, int instanceId, float? x, float? y, float? x2 = null, float? y2 = null)
+        public async Task<ActionValidationResult> ResolveAndPrepareTarget(string action, int instanceId, float? x, float? y, float? x2 = null, float? y2 = null)
         {
-            Vector2 position;
-            GameObject target = null;
+            var (initialTarget, initialPosition, error) = ResolveInitialTargetAndPosition(instanceId, x, y);
+            if (error != null) return error;
 
+            var visibilityResult = await EnsureTargetIsVisibleAsync(initialTarget, initialPosition);
+            if (visibilityResult.error != null) return visibilityResult.error;
+            var finalPosition = visibilityResult.finalPosition;
+
+            var interactabilityResult = ValidateInteractability(initialTarget, finalPosition, instanceId == 0);
+            if (interactabilityResult.error != null) return interactabilityResult.error;
+            var finalTarget = interactabilityResult.finalTarget;
+
+            var actionParamsResult = ValidateActionSpecificParameters(action, x2, y2);
+            if (actionParamsResult.error != null) return actionParamsResult.error;
+            
+            return new ActionValidationResult
+            {
+                IsValid = true,
+                Target = finalTarget,
+                Position = finalPosition,
+                EndPosition = actionParamsResult.endPosition,
+                ScrollDelta = actionParamsResult.scrollDelta
+            };
+        }
+        
+        private (GameObject target, Vector2 position, ActionValidationResult error) ResolveInitialTargetAndPosition(int instanceId, float? x, float? y)
+        {
             if (instanceId != 0)
             {
-                target = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
+                var target = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
                 if (target == null)
                 {
-                    return new ActionValidationResult { ErrorCode = "InvalidInstanceID", Message = $"Instance ID {instanceId} is not a valid GameObject." };
+                    return (null, Vector2.zero, new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeInvalidInstanceID, Message = $"Instance ID {instanceId} is not a valid GameObject." });
                 }
-
-                if (x.HasValue && y.HasValue)
+                
+                if (!GetScreenPositionForTarget(target, out var position))
                 {
-                    position = new Vector2(x.Value, y.Value);
+                    return (target, Vector2.zero, new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeCannotDeterminePosition, Message = $"Could not determine screen position for '{target.name}'.", Target = target });
                 }
-                else if (!GetScreenPositionForTarget(target, out position))
-                {
-                    return new ActionValidationResult { ErrorCode = "CannotDeterminePosition", Message = $"Could not determine screen position for '{target.name}'.", Target = target };
-                }
-
-                if (!IsPositionInViewport(position))
-                {
-                    return new ActionValidationResult { ErrorCode = "TargetOutOfViewport", Message = $"Target '{target.name}' is outside the screen's viewport.", Position = position, Target = target };
-                }
-
-                if (!VerifyInteractableTargetAtPosition(position, target))
-                {
-                    var blockers = GetBlockingObjectNames(position, target);
-                    var message = blockers.Count > 0
-                        ? $"Target is occluded by: {string.Join(", ", blockers)}."
-                        : "Target is not the primary interactable object at its screen position.";
-                    return new ActionValidationResult { ErrorCode = "TargetNotInteractable", Message = message, Target = target };
-                }
+                return (target, position, null);
             }
-            else
+            
+            if (!x.HasValue || !y.HasValue)
             {
-                if (!x.HasValue || !y.HasValue)
+                return (null, Vector2.zero, new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeMissingCoordinates, Message = "Screen coordinates (x, y) are required when no instanceID is provided." });
+            }
+            return (null, new Vector2(x.Value, y.Value), null);
+        }
+
+        private async Task<(Vector2 finalPosition, ActionValidationResult error)> EnsureTargetIsVisibleAsync(GameObject target, Vector2 initialPosition)
+        {
+            var finalPosition = initialPosition;
+            if (target != null && !IsPositionInViewport(initialPosition))
+            {
+                bool broughtIntoView = await BringTargetIntoView(target);
+                if (broughtIntoView)
                 {
-                    return new ActionValidationResult { ErrorCode = "MissingCoordinates", Message = "Screen coordinates (x, y) are required when no instanceID is provided." };
-                }
-                position = new Vector2(x.Value, y.Value);
-                target = GetInteractableObjectAtPosition(position);
-                if (target == null)
-                {
-                    return new ActionValidationResult { ErrorCode = "NoInteractableObjectFound", Message = $"No interactable object found at {position}." };
+                    await Task.Delay(100); // Wait for scroll to settle.
+                    if (!GetScreenPositionForTarget(target, out finalPosition))
+                    {
+                        var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeCannotDeterminePosition, Message = $"Could not determine screen position for '{target.name}' after scrolling into view.", Target = target };
+                        return (initialPosition, error);
+                    }
                 }
             }
             
-            var result = new ActionValidationResult { IsValid = true, Position = position, Target = target };
+            if (!IsPositionInViewport(finalPosition))
+            {
+                var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeTargetOutOfViewport, Message = $"Target position ({finalPosition}) is outside the screen's viewport.", Position = finalPosition, Target = target };
+                return (finalPosition, error);
+            }
+
+            return (finalPosition, null);
+        }
+        
+        private (GameObject finalTarget, ActionValidationResult error) ValidateInteractability(GameObject initialTarget, Vector2 position, bool resolveTargetFromPosition)
+        {
+            var interactableObject = GetInteractableObjectAtPosition(position);
+            var finalTarget = resolveTargetFromPosition ? interactableObject : initialTarget;
+
+            if (finalTarget == null)
+            {
+                var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeNoInteractableObjectFound, Message = $"No interactable object found at {position}.", Position = position };
+                return (null, error);
+            }
+            
+            var blockers = GetBlockingObjectNames(position, finalTarget);
+            if (blockers.Count > 0)
+            {
+                var message = $"Target '{finalTarget.name}' is occluded by: {string.Join(", ", blockers)}.";
+                var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeTargetNotInteractable, Message = message, Target = finalTarget, Position = position };
+                return (finalTarget, error);
+            }
+
+            return (finalTarget, null);
+        }
+
+        private (Vector2 endPosition, Vector2 scrollDelta, ActionValidationResult error) ValidateActionSpecificParameters(string action, float? x2, float? y2)
+        {
+            Vector2 endPosition = Vector2.zero;
+            Vector2 scrollDelta = Vector2.zero;
 
             switch (action.ToLowerInvariant())
             {
-                case "click":
+                case InputSimulationConstants.ActionClick:
                     break;
-                case "drag":
+                case InputSimulationConstants.ActionDrag:
                     if (!x2.HasValue || !y2.HasValue)
                     {
-                        return new ActionValidationResult { ErrorCode = "MissingEndCoordinates", Message = "End coordinates (ex, ey) are required for a drag action." };
+                        var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeMissingEndCoordinates, Message = "End coordinates (ex, ey) are required for a drag action." };
+                        return (endPosition, scrollDelta, error);
                     }
-                    result.EndPosition = new Vector2(x2.Value, y2.Value);
-                    if (!IsPositionInViewport(result.EndPosition))
+                    endPosition = new Vector2(x2.Value, y2.Value);
+                    if (!IsPositionInViewport(endPosition))
                     {
-                        return new ActionValidationResult { ErrorCode = "EndPositionOutOfViewport", Message = $"Drag end position is outside the screen's viewport." };
+                        var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeEndPositionOutOfViewport, Message = $"Drag end position {endPosition} is outside the screen's viewport." };
+                        return (endPosition, scrollDelta, error);
                     }
                     break;
-                case "scroll":
-                    result.ScrollDelta = new Vector2(x2 ?? 0f, y2 ?? 0f);
+                case InputSimulationConstants.ActionScroll:
+                    scrollDelta = new Vector2(x2 ?? 0f, y2 ?? 0f);
                     break;
                 default:
-                    return new ActionValidationResult { ErrorCode = "UnknownAction", Message = $"Action '{action}' is not supported for validation."};
+                    var unknownActionError = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeUnknownAction, Message = $"Action '{action}' is not supported for validation." };
+                    return (endPosition, scrollDelta, unknownActionError);
             }
-
-            return result;
-        }
-
-        public async Task<bool> BringTargetIntoView(GameObject target)
-        {
-            if (target == null) return false;
-
-            var viewHandler = target.GetComponentInParent<IViewPortHandler>();
-            if (viewHandler == null)
-            {
-                return false;
-            }
-
-            return await viewHandler.BringIntoView(target);
+            return (endPosition, scrollDelta, null);
         }
 
         public async Task ClickAt(GameObject target, Vector2 screenPosition, int clickCount = 1)
@@ -388,7 +404,7 @@ namespace MCPForUnity.Runtime.InputSimulation
                     await _cursor.ClickFlash();
                 }
 
-                var wasHandled = responsibleHandler != null && responsibleHandler.Handle(target, "click");
+                var wasHandled = responsibleHandler != null && responsibleHandler.Handle(target, "click", null);
 
                 if (wasHandled) continue;
 
@@ -396,7 +412,6 @@ namespace MCPForUnity.Runtime.InputSimulation
                 {
                     _input.SetMousePosition(screenPosition);
                     _input.LeftButtonPress();
-                    await Task.Delay(100);
                     _input.LeftButtonRelease();
                 }
                 else
@@ -411,7 +426,7 @@ namespace MCPForUnity.Runtime.InputSimulation
             EnsureReady();
 
             var duration = VirtualCursor.CalculateDuration(start, end);
-            
+
             Action<Vector2> dragUpdater;
 
             if (_input != null && _input.IsInitialized)
@@ -429,21 +444,16 @@ namespace MCPForUnity.Runtime.InputSimulation
                 _cursor.SetScreenPosition(start);
                 dragUpdater = (pos) => _legacyInput.UpdateDrag(ped, pos);
             }
-            
-            float elapsed = 0f;
-            while (elapsed < duration)
+
+            await AnimationHelper.AnimateOverTime(duration, eased =>
             {
-                float t = Mathf.Clamp01(elapsed / duration);
-                float eased = Mathf.SmoothStep(0, 1, t);
                 Vector2 pos = Vector2.LerpUnclamped(start, end, eased);
                 dragUpdater(pos);
                 _cursor.SetScreenPosition(pos);
-                await Task.Yield();
-                elapsed += Time.deltaTime;
-            }
+            }, useUnscaledTime: true);
 
             _cursor.SetScreenPosition(end);
-            
+
             if (_input != null && _input.IsInitialized)
             {
                 _input.SetMousePosition(end);
@@ -462,8 +472,7 @@ namespace MCPForUnity.Runtime.InputSimulation
 
             await _cursor.MoveTo(this, screenPosition);
 
-            const float scrollSpeed = 1000f;
-            float duration = Mathf.Clamp(delta.magnitude / scrollSpeed, 0.1f, 2.0f);
+            float duration = Mathf.Clamp(delta.magnitude / ScrollSpeed, 0.1f, 2.0f);
             
             Action<Vector2> scrollAction;
 
@@ -485,6 +494,74 @@ namespace MCPForUnity.Runtime.InputSimulation
                 await Task.Yield();
                 elapsed += Time.deltaTime;
             }
+        }
+
+        public async Task<bool> BringTargetIntoView(GameObject target)
+        {
+            if (target == null) return false;
+
+            var scrollRect = target.GetComponentInParent<ScrollRect>();
+            if (scrollRect == null)
+            {
+                return false;
+            }
+
+            var targetRect = target.GetComponent<RectTransform>();
+            if (targetRect == null) return false;
+
+            Vector2 targetNormalizedPos = CalculateTargetNormalizedPosition(scrollRect, targetRect);
+            return await AnimateScroll(scrollRect, targetNormalizedPos);
+        }
+
+        private Vector2 CalculateTargetNormalizedPosition(ScrollRect scrollRect, RectTransform targetRect)
+        {
+            Vector3[] targetWorldCorners = new Vector3[4];
+            targetRect.GetWorldCorners(targetWorldCorners);
+            Vector3 targetWorldCenter = (targetWorldCorners[0] + targetWorldCorners[2]) * 0.5f;
+
+            Vector3 localTargetPos = scrollRect.content.InverseTransformPoint(targetWorldCenter);
+            
+            Vector2 contentSize = scrollRect.content.rect.size;
+            Vector2 viewportSize = scrollRect.viewport.rect.size;
+            Vector2 scrollableSize = contentSize - viewportSize;
+
+            Vector2 targetNormalizedPos = scrollRect.normalizedPosition;
+
+            if (scrollRect.horizontal && scrollableSize.x > 0)
+            {
+                float targetX = localTargetPos.x + contentSize.x * scrollRect.content.pivot.x;
+                float normalizedX = (targetX - viewportSize.x * 0.5f) / scrollableSize.x;
+                targetNormalizedPos.x = Mathf.Clamp01(normalizedX);
+            }
+
+            if (scrollRect.vertical && scrollableSize.y > 0)
+            {
+                float targetY = localTargetPos.y + contentSize.y * scrollRect.content.pivot.y;
+                float normalizedY = (targetY - viewportSize.y * 0.5f) / scrollableSize.y;
+                targetNormalizedPos.y = Mathf.Clamp01(normalizedY);
+            }
+
+            return targetNormalizedPos;
+        }
+
+        private async Task<bool> AnimateScroll(ScrollRect scrollRect, Vector2 targetNormalizedPosition)
+        {
+            Vector2 startPosition = scrollRect.normalizedPosition;
+            float duration = VirtualCursor.CalculateDuration(startPosition * 1000, targetNormalizedPosition * 1000);
+            if (duration <= 0.01f)
+            {
+                scrollRect.normalizedPosition = targetNormalizedPosition;
+                await Task.Yield();
+                return true;
+            }
+
+            await AnimationHelper.AnimateOverTime(duration, eased =>
+            {
+                scrollRect.normalizedPosition = Vector2.Lerp(startPosition, targetNormalizedPosition, eased);
+            }, useUnscaledTime: true);
+            scrollRect.normalizedPosition = targetNormalizedPosition;
+            await Task.Yield();
+            return true;
         }
 
         private bool IsInputSystemUIModuleActive()

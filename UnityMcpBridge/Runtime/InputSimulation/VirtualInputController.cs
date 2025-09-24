@@ -10,6 +10,12 @@ namespace MCPForUnity.Runtime.InputSimulation
     /// </summary>
     public sealed class VirtualInputController : IDisposable
     {
+        private static class DeviceNames
+        {
+            public const string Mouse = "VirtualMouse";
+            public const string Keyboard = "VirtualKeyboard";
+            public const string Touchscreen = "VirtualTouchscreen";
+        }
         private Mouse _virtualMouse;
         private Keyboard _virtualKeyboard;
         private Touchscreen _virtualTouchscreen;
@@ -28,9 +34,9 @@ namespace MCPForUnity.Runtime.InputSimulation
                 return;
             }
 
-            _virtualMouse = TryGetOrCreateDevice<Mouse>("VirtualMouse");
-            _virtualKeyboard = TryGetOrCreateDevice<Keyboard>("VirtualKeyboard");
-            _virtualTouchscreen = TryGetOrCreateDevice<Touchscreen>("VirtualTouchscreen");
+            _virtualMouse = TryGetOrCreateDevice<Mouse>(DeviceNames.Mouse);
+            _virtualKeyboard = TryGetOrCreateDevice<Keyboard>(DeviceNames.Keyboard);
+            _virtualTouchscreen = TryGetOrCreateDevice<Touchscreen>(DeviceNames.Touchscreen);
 
             _isInitialized = _virtualMouse != null && _virtualKeyboard != null;
             if (_isInitialized)
@@ -100,9 +106,9 @@ namespace MCPForUnity.Runtime.InputSimulation
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[VirtualInputController] Failed to create device '{name}': {ex.Message}");
-                return null;
             }
+
+            return null;
         }
 
         private static void TryRemoveDevice(InputDevice device)
@@ -113,17 +119,18 @@ namespace MCPForUnity.Runtime.InputSimulation
             }
             try
             {
-                if (string.Equals(device.name, "VirtualMouse", StringComparison.Ordinal) ||
-                    string.Equals(device.name, "VirtualKeyboard", StringComparison.Ordinal) ||
-                    string.Equals(device.name, "VirtualTouchscreen", StringComparison.Ordinal))
+                if (string.Equals(device.name, DeviceNames.Mouse, StringComparison.Ordinal) ||
+                    string.Equals(device.name, DeviceNames.Keyboard, StringComparison.Ordinal) ||
+                    string.Equals(device.name, DeviceNames.Touchscreen, StringComparison.Ordinal))
                 {
                     InputSystem.RemoveDevice(device);
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[VirtualInputController] Failed to remove device '{device}' : {ex.Message}");
             }
+
+            return;
         }
     }
 }

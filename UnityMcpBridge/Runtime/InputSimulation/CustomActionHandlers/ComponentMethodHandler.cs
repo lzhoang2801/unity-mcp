@@ -28,7 +28,7 @@ namespace MCPForUnity.Runtime.InputSimulation.CustomActionHandlers
             return target.GetComponent(_componentName) != null;
         }
         
-        public bool Handle(GameObject target, string actionType)
+        public bool Handle(GameObject target, string actionType, object[] args = null)
         {
             if (target == null || string.IsNullOrEmpty(_componentName) || string.IsNullOrEmpty(_methodName)) return false;
 
@@ -43,7 +43,7 @@ namespace MCPForUnity.Runtime.InputSimulation.CustomActionHandlers
             }
             
             Debug.Log($"[CustomActionHandlers] Found {_componentName} on {target.name}. Calling {_methodName}().");
-            method.Invoke(component, null);
+            method.Invoke(component, args);
             return true;
         }
     }

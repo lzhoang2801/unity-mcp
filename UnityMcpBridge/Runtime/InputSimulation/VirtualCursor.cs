@@ -11,8 +11,13 @@ namespace MCPForUnity.Runtime.InputSimulation
     /// </summary>
     public sealed class VirtualCursor
     {
-        private const string CanvasName = "__InputSim_VirtualCursorCanvas";
-        private const string CursorName = "__InputSim_VirtualCursor";
+        private const string CanvasName = "__VirtualCursorCanvas";
+        private const string CursorName = "__VirtualCursor";
+
+		private const float CursorSize = 28f;
+		private const float MoveDistanceDivisor = 4000f;
+		private const float MoveMinDuration = 0.025f;
+		private const float MoveMaxDuration = 1.0f;
 
         private Canvas _canvas;
         private RectTransform _cursorRect;
@@ -44,7 +49,7 @@ namespace MCPForUnity.Runtime.InputSimulation
             _cursorRect.anchorMin = Vector2.zero;
             _cursorRect.anchorMax = Vector2.zero;
             _cursorRect.pivot = new Vector2(0.5f, 0.5f);
-            _cursorRect.sizeDelta = new Vector2(28, 28);
+            _cursorRect.sizeDelta = new Vector2(CursorSize, CursorSize);
 
             _cursorImage = cursorGo.AddComponent<Image>();
             _cursorImage.raycastTarget = false;
@@ -79,16 +84,12 @@ namespace MCPForUnity.Runtime.InputSimulation
                 SetScreenPosition(to);
                 return;
             }
-            float elapsed = 0f;
-            while (elapsed < duration)
+
+            await AnimationHelper.AnimateOverTime(duration, eased =>
             {
-                float t = Mathf.Clamp01(elapsed / duration);
-                float eased = Mathf.SmoothStep(0, 1, t);
                 Vector2 pos = Vector2.LerpUnclamped(from, to, eased);
                 SetScreenPosition(pos);
-                await Task.Yield();
-                elapsed += Time.deltaTime;
-            }
+            }, useUnscaledTime: true);
             SetScreenPosition(to);
         }
 
@@ -128,7 +129,7 @@ namespace MCPForUnity.Runtime.InputSimulation
         {
             float distance = Vector2.Distance(start, end);
             if (distance < 1.0f) return 0f;
-            return Mathf.Clamp(distance / 2000f, 0.05f, 2.0f);
+            return Mathf.Clamp(distance / MoveDistanceDivisor, MoveMinDuration, MoveMaxDuration);
         }
 
         private static Sprite CreateDefaultCursorSprite()
