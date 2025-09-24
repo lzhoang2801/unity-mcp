@@ -1,7 +1,7 @@
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
-namespace MCPForUnity.Editor.Models
+namespace MCPForUnity.Runtime.InputSimulation
 {
     /// <summary>
     /// Represents a deserialized and structured input simulation command,

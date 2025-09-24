@@ -4,7 +4,7 @@ using UnityEditor;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Runtime.InputSimulation;
 using System.Threading.Tasks;
-using MCPForUnity.Editor.Models;
+using MCPForUnity.Runtime.InputSimulation;
 using UnityEngine;
 
 namespace MCPForUnity.Editor.Tools
@@ -14,14 +14,14 @@ namespace MCPForUnity.Editor.Tools
     /// </summary>
     public static class InputSimulation
     {
-        public static async Task<object> HandleCommand(JObject @params)
+        public static async Task<object> HandleCommand(JObject commandParams)
         {
             if (!EditorApplication.isPlaying)
             {
                 return Response.Error(InputSimulationConstants.ErrorCodeNotInPlayMode, new { message = "Input simulation requires Play Mode." });
             }
 
-            var command = InputCommand.FromJObject(@params);
+            var command = InputCommand.FromJObject(commandParams);
             
             if (string.IsNullOrEmpty(command.Action))
             {
@@ -31,70 +31,78 @@ namespace MCPForUnity.Editor.Tools
             try
             {
                 var mgr = InputSimulationManager.Instance;
-                
-                string lowerAction = command.Action.ToLowerInvariant();
-                
-                var startPos = command.StartPosition;
-                if (lowerAction == InputSimulationConstants.ActionScroll && command.InstanceID == 0 && !startPos.HasValue)
-                {
-                    startPos = mgr.GetCursorPosition();
-                }
-
-                float? x2 = lowerAction == InputSimulationConstants.ActionDrag ? command.EndPosition?.x : (lowerAction == InputSimulationConstants.ActionScroll ? command.Delta?.x : null);
-                float? y2 = lowerAction == InputSimulationConstants.ActionDrag ? command.EndPosition?.y : (lowerAction == InputSimulationConstants.ActionScroll ? command.Delta?.y : null);
-
-                var validationResult = await mgr.ResolveAndPrepareTarget(
-                    command.Action, command.InstanceID, startPos?.x, startPos?.y, x2, y2);
+                var validationResult = await mgr.ResolveAndPrepareTarget(command);
 
                 if (!validationResult.IsValid)
                 {
-                    return Response.Error(validationResult.ErrorCode, new {
-                        message = validationResult.Message,
-                        x = validationResult.Position.x,
-                        y = validationResult.Position.y,
-                        target = validationResult.Target?.name
-                    });
+                    return CreateErrorResponse(validationResult);
                 }
                 
-                switch (lowerAction)
+                switch (command.Action.ToLowerInvariant())
                 {
                     case InputSimulationConstants.ActionClick:
                         await mgr.ClickAt(validationResult.Target, validationResult.Position, command.ClickCount);
-                        return Response.Success("Click completed", new {
-                            x = validationResult.Position.x,
-                            y = validationResult.Position.y,
-                            target = validationResult.Target?.name,
-                            command.ClickCount
-                        });
+                        break;
 
                     case InputSimulationConstants.ActionDrag:
                         await mgr.DragTo(validationResult.Target, validationResult.Position, validationResult.EndPosition);
-                        return Response.Success("Drag completed", new { 
-                            sx = validationResult.Position.x,
-                            sy = validationResult.Position.y,
-                            ex = validationResult.EndPosition.x,
-                            ey = validationResult.EndPosition.y,
-                            target = validationResult.Target?.name
-                        });
+                        break;
 
                     case InputSimulationConstants.ActionScroll:
                         await mgr.Scroll(validationResult.Position, validationResult.ScrollDelta);
-                        return Response.Success("Scroll completed", new {
-                            x = validationResult.Position.x,
-                            y = validationResult.Position.y,
-                            dx = command.Delta?.x ?? 0f,
-                            dy = command.Delta?.y ?? 0f,
-                            target = validationResult.Target?.name
-                        });
+                        break;
 
                     default:
                         return Response.Error(InputSimulationConstants.ErrorCodeUnknownAction, new { command.Action });
                 }
+                
+                return CreateSuccessResponse(command.Action, validationResult);
             }
             catch (Exception ex)
             {
                 return Response.Error(InputSimulationConstants.ErrorCodeException, new { message = ex.Message, stack = ex.StackTrace });
             }
+        }
+
+        private static object CreateErrorResponse(ActionValidationResult result)
+        {
+            return Response.Error(result.ErrorCode, new {
+                message = result.Message,
+                x = result.Position.x,
+                y = result.Position.y,
+                target = result.Target?.name
+            });
+        }
+
+        private static object CreateSuccessResponse(string action, ActionValidationResult result)
+        {
+            var responseData = new JObject
+            {
+                ["target"] = result.Target?.name
+            };
+
+            switch (action.ToLowerInvariant())
+            {
+                case InputSimulationConstants.ActionClick:
+                    responseData["x"] = result.Position.x;
+                    responseData["y"] = result.Position.y;
+                    responseData["clickCount"] = result.ClickCount;
+                    break;
+                case InputSimulationConstants.ActionDrag:
+                    responseData["sx"] = result.Position.x;
+                    responseData["sy"] = result.Position.y;
+                    responseData["ex"] = result.EndPosition.x;
+                    responseData["ey"] = result.EndPosition.y;
+                    break;
+                case InputSimulationConstants.ActionScroll:
+                    responseData["x"] = result.Position.x;
+                    responseData["y"] = result.Position.y;
+                    responseData["dx"] = result.ScrollDelta.x;
+                    responseData["dy"] = result.ScrollDelta.y;
+                    break;
+            }
+            
+            return Response.Success($"{char.ToUpper(action[0]) + action.Substring(1)} completed", responseData);
         }
     }
 }

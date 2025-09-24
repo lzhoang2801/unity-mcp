@@ -248,145 +248,127 @@ namespace MCPForUnity.Runtime.InputSimulation
             return false;
         }
 
-        public class ActionValidationResult
+        public async Task<ActionValidationResult> ResolveAndPrepareTarget(InputCommand command)
         {
-            public bool IsValid;
-            public string ErrorCode;
-            public string Message;
-            public Vector2 Position;
-            public Vector2 EndPosition;
-            public Vector2 ScrollDelta;
-            public GameObject Target;
+            var result = new ActionValidationResult();
+
+            ResolveInitialTargetAndPosition(command, result);
+            if (!result.IsValid) return result;
+
+            await EnsureTargetIsVisibleAsync(result);
+            if (!result.IsValid) return result;
+
+            ValidateInteractability(command, result);
+            if (!result.IsValid) return result;
+
+            ValidateActionSpecificParameters(command, result);
+            return result;
         }
 
-        public async Task<ActionValidationResult> ResolveAndPrepareTarget(string action, int instanceId, float? x, float? y, float? x2 = null, float? y2 = null)
+        private void ResolveInitialTargetAndPosition(InputCommand command, ActionValidationResult result)
         {
-            var (initialTarget, initialPosition, error) = ResolveInitialTargetAndPosition(instanceId, x, y);
-            if (error != null) return error;
-
-            var visibilityResult = await EnsureTargetIsVisibleAsync(initialTarget, initialPosition);
-            if (visibilityResult.error != null) return visibilityResult.error;
-            var finalPosition = visibilityResult.finalPosition;
-
-            var interactabilityResult = ValidateInteractability(initialTarget, finalPosition, instanceId == 0);
-            if (interactabilityResult.error != null) return interactabilityResult.error;
-            var finalTarget = interactabilityResult.finalTarget;
-
-            var actionParamsResult = ValidateActionSpecificParameters(action, x2, y2);
-            if (actionParamsResult.error != null) return actionParamsResult.error;
-            
-            return new ActionValidationResult
+            if (command.InstanceID != 0)
             {
-                IsValid = true,
-                Target = finalTarget,
-                Position = finalPosition,
-                EndPosition = actionParamsResult.endPosition,
-                ScrollDelta = actionParamsResult.scrollDelta
-            };
-        }
-        
-        private (GameObject target, Vector2 position, ActionValidationResult error) ResolveInitialTargetAndPosition(int instanceId, float? x, float? y)
-        {
-            if (instanceId != 0)
-            {
-                var target = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
+                var target = EditorUtility.InstanceIDToObject(command.InstanceID) as GameObject;
                 if (target == null)
                 {
-                    return (null, Vector2.zero, new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeInvalidInstanceID, Message = $"Instance ID {instanceId} is not a valid GameObject." });
+                    result.SetError(InputSimulationConstants.ErrorCodeInvalidInstanceID, $"Instance ID {command.InstanceID} is not a valid GameObject.");
+                    return;
                 }
                 
                 if (!GetScreenPositionForTarget(target, out var position))
                 {
-                    return (target, Vector2.zero, new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeCannotDeterminePosition, Message = $"Could not determine screen position for '{target.name}'.", Target = target });
+                    result.SetError(InputSimulationConstants.ErrorCodeCannotDeterminePosition, $"Could not determine screen position for '{target.name}'.", target);
+                    return;
                 }
-                return (target, position, null);
+                result.Target = target;
+                result.Position = position;
             }
-            
-            if (!x.HasValue || !y.HasValue)
+            else if (command.StartPosition.HasValue)
             {
-                return (null, Vector2.zero, new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeMissingCoordinates, Message = "Screen coordinates (x, y) are required when no instanceID is provided." });
+                result.Position = command.StartPosition.Value;
             }
-            return (null, new Vector2(x.Value, y.Value), null);
+            else if (command.Action.ToLowerInvariant() == InputSimulationConstants.ActionScroll)
+            {
+                result.Position = GetCursorPosition();
+            }
+            else
+            {
+                result.SetError(InputSimulationConstants.ErrorCodeMissingCoordinates, "Screen coordinates (x, y) are required when no instanceID is provided.");
+                return;
+            }
+            result.IsValid = true;
         }
 
-        private async Task<(Vector2 finalPosition, ActionValidationResult error)> EnsureTargetIsVisibleAsync(GameObject target, Vector2 initialPosition)
+        private async Task EnsureTargetIsVisibleAsync(ActionValidationResult result)
         {
-            var finalPosition = initialPosition;
-            if (target != null && !IsPositionInViewport(initialPosition))
+            if (result.Target != null && !IsPositionInViewport(result.Position))
             {
-                bool broughtIntoView = await BringTargetIntoView(target);
+                bool broughtIntoView = await BringTargetIntoView(result.Target);
                 if (broughtIntoView)
                 {
-                    await Task.Delay(100); // Wait for scroll to settle.
-                    if (!GetScreenPositionForTarget(target, out finalPosition))
+                    await Task.Delay(100);
+                    if (!GetScreenPositionForTarget(result.Target, out var newPosition))
                     {
-                        var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeCannotDeterminePosition, Message = $"Could not determine screen position for '{target.name}' after scrolling into view.", Target = target };
-                        return (initialPosition, error);
+                        result.SetError(InputSimulationConstants.ErrorCodeCannotDeterminePosition, $"Could not determine screen position for '{result.Target.name}' after scrolling into view.", result.Target);
+                        return;
                     }
+                    result.Position = newPosition;
                 }
             }
             
-            if (!IsPositionInViewport(finalPosition))
+            if (!IsPositionInViewport(result.Position))
             {
-                var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeTargetOutOfViewport, Message = $"Target position ({finalPosition}) is outside the screen's viewport.", Position = finalPosition, Target = target };
-                return (finalPosition, error);
+                result.SetError(InputSimulationConstants.ErrorCodeTargetOutOfViewport, $"Target position ({result.Position}) is outside the screen's viewport.", result.Target, result.Position);
             }
-
-            return (finalPosition, null);
         }
         
-        private (GameObject finalTarget, ActionValidationResult error) ValidateInteractability(GameObject initialTarget, Vector2 position, bool resolveTargetFromPosition)
+        private void ValidateInteractability(InputCommand command, ActionValidationResult result)
         {
-            var interactableObject = GetInteractableObjectAtPosition(position);
-            var finalTarget = resolveTargetFromPosition ? interactableObject : initialTarget;
-
-            if (finalTarget == null)
+            var interactableObject = GetInteractableObjectAtPosition(result.Position);
+            
+            if (command.InstanceID == 0)
             {
-                var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeNoInteractableObjectFound, Message = $"No interactable object found at {position}.", Position = position };
-                return (null, error);
+                result.Target = interactableObject;
+            }
+
+            if (result.Target == null)
+            {
+                result.SetError(InputSimulationConstants.ErrorCodeNoInteractableObjectFound, $"No interactable object found at {result.Position}.", null, result.Position);
+                return;
             }
             
-            var blockers = GetBlockingObjectNames(position, finalTarget);
+            var blockers = GetBlockingObjectNames(result.Position, result.Target);
             if (blockers.Count > 0)
             {
-                var message = $"Target '{finalTarget.name}' is occluded by: {string.Join(", ", blockers)}.";
-                var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeTargetNotInteractable, Message = message, Target = finalTarget, Position = position };
-                return (finalTarget, error);
+                var message = $"Target '{result.Target.name}' is occluded by: {string.Join(", ", blockers)}.";
+                result.SetError(InputSimulationConstants.ErrorCodeTargetNotInteractable, message, result.Target, result.Position);
             }
-
-            return (finalTarget, null);
         }
 
-        private (Vector2 endPosition, Vector2 scrollDelta, ActionValidationResult error) ValidateActionSpecificParameters(string action, float? x2, float? y2)
+        private void ValidateActionSpecificParameters(InputCommand command, ActionValidationResult result)
         {
-            Vector2 endPosition = Vector2.zero;
-            Vector2 scrollDelta = Vector2.zero;
+            string action = command.Action.ToLowerInvariant();
+            result.ClickCount = command.ClickCount;
 
-            switch (action.ToLowerInvariant())
+            if (action == InputSimulationConstants.ActionDrag)
             {
-                case InputSimulationConstants.ActionClick:
-                    break;
-                case InputSimulationConstants.ActionDrag:
-                    if (!x2.HasValue || !y2.HasValue)
-                    {
-                        var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeMissingEndCoordinates, Message = "End coordinates (ex, ey) are required for a drag action." };
-                        return (endPosition, scrollDelta, error);
-                    }
-                    endPosition = new Vector2(x2.Value, y2.Value);
-                    if (!IsPositionInViewport(endPosition))
-                    {
-                        var error = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeEndPositionOutOfViewport, Message = $"Drag end position {endPosition} is outside the screen's viewport." };
-                        return (endPosition, scrollDelta, error);
-                    }
-                    break;
-                case InputSimulationConstants.ActionScroll:
-                    scrollDelta = new Vector2(x2 ?? 0f, y2 ?? 0f);
-                    break;
-                default:
-                    var unknownActionError = new ActionValidationResult { ErrorCode = InputSimulationConstants.ErrorCodeUnknownAction, Message = $"Action '{action}' is not supported for validation." };
-                    return (endPosition, scrollDelta, unknownActionError);
+                if (!command.EndPosition.HasValue)
+                {
+                    result.SetError(InputSimulationConstants.ErrorCodeMissingEndCoordinates, "End coordinates (ex, ey) are required for a drag action.");
+                    return;
+                }
+                if (!IsPositionInViewport(command.EndPosition.Value))
+                {
+                    result.SetError(InputSimulationConstants.ErrorCodeEndPositionOutOfViewport, $"Drag end position {command.EndPosition.Value} is outside the screen's viewport.");
+                    return;
+                }
+                result.EndPosition = command.EndPosition.Value;
             }
-            return (endPosition, scrollDelta, null);
+            else if (action == InputSimulationConstants.ActionScroll)
+            {
+                result.ScrollDelta = command.Delta ?? Vector2.zero;
+            }
         }
 
         public async Task ClickAt(GameObject target, Vector2 screenPosition, int clickCount = 1)
@@ -569,6 +551,32 @@ namespace MCPForUnity.Runtime.InputSimulation
             if (EventSystem.current == null) return false;
             
             return EventSystem.current.currentInputModule is InputSystemUIInputModule;
+        }
+    }
+
+    public class ActionValidationResult
+    {
+        public bool IsValid;
+        public string ErrorCode;
+        public string Message;
+        public Vector2 Position;
+        public Vector2 EndPosition;
+        public Vector2 ScrollDelta;
+        public GameObject Target;
+        public int ClickCount;
+
+        public ActionValidationResult()
+        {
+            IsValid = false;
+        }
+
+        public void SetError(string code, string message, GameObject target = null, Vector2? position = null)
+        {
+            IsValid = false;
+            ErrorCode = code;
+            Message = message;
+            if (target != null) Target = target;
+            if (position.HasValue) Position = position.Value;
         }
     }
 }
