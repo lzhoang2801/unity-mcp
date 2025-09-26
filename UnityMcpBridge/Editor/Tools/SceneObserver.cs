@@ -95,7 +95,7 @@ namespace MCPForUnity.Editor.Tools
             {
                 if (rootGo.activeInHierarchy)
                 {
-                    rootElements.AddRange(ProcessNodeRecursively(rootGo.transform, pathBuilder));
+                    rootElements.AddRange(ProcessNode(rootGo.transform, pathBuilder));
                 }
             }
             
@@ -125,7 +125,7 @@ namespace MCPForUnity.Editor.Tools
             return currentState;
         }
         
-        private static List<SceneElement> ProcessNodeRecursively(Transform nodeTransform, StringBuilder pathBuilder)
+        private static List<SceneElement> ProcessNode(Transform nodeTransform, StringBuilder pathBuilder)
         {
             int originalLength = pathBuilder.Length;
             pathBuilder.Append("/").Append(nodeTransform.name);
@@ -136,10 +136,10 @@ namespace MCPForUnity.Editor.Tools
             {
                 if (childTransform.gameObject.activeInHierarchy)
                 {
-                    processedChildren.AddRange(ProcessNodeRecursively(childTransform, pathBuilder));
+                    processedChildren.AddRange(ProcessNode(childTransform, pathBuilder));
                 }
             }
-            
+
             pathBuilder.Length = originalLength;
 
             var go = nodeTransform.gameObject;
@@ -171,34 +171,39 @@ namespace MCPForUnity.Editor.Tools
             }
 
             bool isSelfInteractive = !string.IsNullOrEmpty(element.actionType);
-            if (isSelfInteractive)
+            element.interactiveDescendantCount = processedChildren.Sum(c => c.interactiveDescendantCount) + (isSelfInteractive ? 1 : 0);
+
+            if (element.interactiveDescendantCount == 1 && !isSelfInteractive)
             {
-                element.interactiveDescendantCount = 1;
-                element.singleInteractiveDescendant = element;
-            }
-            else
-            {
-                element.interactiveDescendantCount = 0;
+                SceneElement singleInteractiveDescendant = null;
                 foreach (var child in processedChildren)
                 {
-                    element.interactiveDescendantCount += child.interactiveDescendantCount;
                     if (child.interactiveDescendantCount == 1)
                     {
-                        element.singleInteractiveDescendant = (element.singleInteractiveDescendant == null) ? child.singleInteractiveDescendant : null;
+                        singleInteractiveDescendant = (child.singleInteractiveDescendant ?? child);
+                        break;
                     }
-                    else if (child.interactiveDescendantCount > 1)
+                }
+
+                if (singleInteractiveDescendant != null)
+                {
+                    element.id = singleInteractiveDescendant.id;
+                    element.actionType = singleInteractiveDescendant.actionType;
+                    element.isInteractable = singleInteractiveDescendant.isInteractable;
+                    
+                    foreach (var child in processedChildren)
                     {
-                        element.singleInteractiveDescendant = null;
+                        element.summary.AddRange(child.summary);
                     }
+                    element.childElements.Clear();
+                    return new List<SceneElement> { element };
                 }
             }
 
             var finalChildren = new List<SceneElement>();
             foreach (var child in processedChildren)
             {
-                bool isContextNode = string.IsNullOrEmpty(child.actionType) && 
-                                    child.interactiveDescendantCount == 0 && 
-                                    child.summary.Count > 0;
+                bool isContextNode = string.IsNullOrEmpty(child.actionType) && child.interactiveDescendantCount == 0 && child.summary.Count > 0;
 
                 if (isContextNode)
                 {
@@ -210,44 +215,19 @@ namespace MCPForUnity.Editor.Tools
                 }
             }
 
-            if (!isSelfInteractive && element.interactiveDescendantCount == 1 && element.singleInteractiveDescendant != null)
+            element.childElements = finalChildren;
+
+            if (isSelfInteractive || element.summary.Count > 0)
             {
-                var nodeToMerge = element.singleInteractiveDescendant;
-                element.id = nodeToMerge.id;
-                element.actionType = nodeToMerge.actionType;
-                element.isInteractable = nodeToMerge.isInteractable;
-                
-                var directChildContainer = finalChildren.FirstOrDefault(c => c.singleInteractiveDescendant == nodeToMerge || c == nodeToMerge);
-                if (directChildContainer != null)
-                {
-                    element.summary.AddRange(directChildContainer.summary);
-                }
-
-                finalChildren.Clear();
-            }
-
-            bool isNowInteractive = !string.IsNullOrEmpty(element.actionType);
-            bool hasSummary = element.summary.Count > 0;
-            bool isScrollRect = element.actionType == "ScrollRect";
-
-            if (isNowInteractive || hasSummary || isScrollRect)
-            {
-                element.childElements = finalChildren;
-                if (isNowInteractive && !isScrollRect)
-                {
-                    element.childElements.Clear();
-                }
                 return new List<SceneElement> { element };
             }
-            else
-            {
-                return finalChildren;
-            }
+
+            return finalChildren;
         }
 
         private static Component FindInteractiveComponent(GameObject go)
         {
-            if (go.TryGetComponent<Selectable>(out var selectable))return selectable;
+            if (go.TryGetComponent<Selectable>(out var selectable)) return selectable;
             else if (go.TryGetComponent<TapableBehaviour>(out var tapableBehaviour)) return tapableBehaviour;
             else if (go.TryGetComponent<ScrollRect>(out var scrollRect)) return scrollRect;
             else if (go.TryGetComponent<IPointerClickHandler>(out var pointerClickHandler)) return (Component)pointerClickHandler;
