@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Text;
+using System.Reflection;
 using TMPro;
 using SceneObserverData;
 using UnityEditor;
@@ -246,10 +247,10 @@ namespace MCPForUnity.Editor.Tools
 
         private static Component FindInteractiveComponent(GameObject go)
         {
-            if (go.TryGetComponent<Selectable>(out var selectable)) return selectable;
-            if (go.TryGetComponent<IPointerClickHandler>(out var pointerClickHandler)) return (Component)pointerClickHandler;
-            if (go.TryGetComponent<ScrollRect>(out var scrollRect)) return scrollRect;
-            if (go.TryGetComponent<TapableBehaviour>(out var tapableBehaviour)) return tapableBehaviour;
+            if (go.TryGetComponent<Selectable>(out var selectable))return selectable;
+            else if (go.TryGetComponent<TapableBehaviour>(out var tapableBehaviour)) return tapableBehaviour;
+            else if (go.TryGetComponent<ScrollRect>(out var scrollRect)) return scrollRect;
+            else if (go.TryGetComponent<IPointerClickHandler>(out var pointerClickHandler)) return (Component)pointerClickHandler;
                     
             return null;
         }
@@ -274,13 +275,26 @@ namespace MCPForUnity.Editor.Tools
         private static void PopulateInteractiveProperties(SceneElement element, Component interactiveComponent)
         {
             bool isInteractable = true;
-            if (interactiveComponent is Selectable selectable)
+        
+            try
             {
-                isInteractable = selectable.IsInteractable();
+                Type componentType = interactiveComponent.GetType();
+                var interactableField = componentType.GetField("interactable", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (interactableField != null && interactableField.FieldType == typeof(bool))
+                {
+                    isInteractable = (bool)interactableField.GetValue(interactiveComponent);
+                }
             }
-            else if (interactiveComponent is Behaviour behaviour)
+            catch
             {
-                isInteractable = behaviour.enabled;
+                if (interactiveComponent is Selectable selectable)
+                {
+                    isInteractable = selectable.IsInteractable();
+                }
+                else if (interactiveComponent is Behaviour behaviour)
+                {
+                    isInteractable = behaviour.enabled;
+                }
             }
             
             element.isInteractable = isInteractable;
