@@ -87,13 +87,31 @@ namespace MCPForUnity.Editor.Tools
 
         public static SceneState GetSceneState()
         {
+            var allRootObjects = new List<GameObject>();
+
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var scene = SceneManager.GetSceneAt(i);
+                if (scene.isLoaded)
+                {
+                    allRootObjects.AddRange(scene.GetRootGameObjects());
+                }
+            }
+
+            GameObject tempObject = new GameObject("TempObject");
+            DontDestroyOnLoad(tempObject);
+            Scene dontDestroyOnLoadScene = tempObject.scene;
+            
+            allRootObjects.AddRange(dontDestroyOnLoadScene.GetRootGameObjects().Where(go => go != tempObject));
+
+            Destroy(tempObject);
+
             var rootElements = new List<SceneElement>();
-            var rootObjects = SceneManager.GetActiveScene().GetRootGameObjects();
             var pathBuilder = new StringBuilder();
 
-            foreach (var rootGo in rootObjects)
+            foreach (var rootGo in allRootObjects.Distinct())
             {
-                if (rootGo.activeInHierarchy)
+                if (rootGo != null && rootGo.activeInHierarchy)
                 {
                     rootElements.AddRange(ProcessNode(rootGo.transform, pathBuilder));
                 }
