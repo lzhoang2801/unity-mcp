@@ -15,9 +15,6 @@ namespace MCPForUnity.Runtime.InputSimulation
         private const string CursorName = "__VirtualCursor";
 
 		private const float CursorSize = 28f;
-		private const float MoveDistanceDivisor = 4000f;
-		private const float MoveMinDuration = 0.025f;
-		private const float MoveMaxDuration = 1.0f;
 
         private Canvas _canvas;
         private RectTransform _cursorRect;
@@ -77,7 +74,7 @@ namespace MCPForUnity.Runtime.InputSimulation
         public async Task MoveTo(MonoBehaviour runner, Vector2 to)
         {
             Vector2 from = _cursorRect.anchoredPosition;
-            float duration = CalculateDuration(from, to);
+			float duration = Time.fixedDeltaTime;
 
             if (duration <= 0f)
             {
@@ -123,13 +120,6 @@ namespace MCPForUnity.Runtime.InputSimulation
             _cursorRect.localScale = baseScale;
             _cursorImage.color = baseColor;
             _isFlashing = false;
-        }
-
-        public static float CalculateDuration(Vector2 start, Vector2 end)
-        {
-            float distance = Vector2.Distance(start, end);
-            if (distance < 1.0f) return 0f;
-            return Mathf.Clamp(distance / MoveDistanceDivisor, MoveMinDuration, MoveMaxDuration);
         }
 
         private static Sprite CreateDefaultCursorSprite()

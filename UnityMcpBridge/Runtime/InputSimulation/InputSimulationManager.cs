@@ -407,7 +407,7 @@ namespace MCPForUnity.Runtime.InputSimulation
         {
             EnsureReady();
 
-            var duration = VirtualCursor.CalculateDuration(start, end);
+			var duration = Time.fixedDeltaTime;
 
             Action<Vector2> dragUpdater;
 
@@ -529,7 +529,7 @@ namespace MCPForUnity.Runtime.InputSimulation
         private async Task<bool> AnimateScroll(ScrollRect scrollRect, Vector2 targetNormalizedPosition)
         {
             Vector2 startPosition = scrollRect.normalizedPosition;
-            float duration = VirtualCursor.CalculateDuration(startPosition * 1000, targetNormalizedPosition * 1000);
+			float duration = Time.fixedDeltaTime;
             if (duration <= 0.01f)
             {
                 scrollRect.normalizedPosition = targetNormalizedPosition;
