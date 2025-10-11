@@ -8,10 +8,10 @@ def register_scene_observer_tools(mcp: FastMCP):
     @mcp.tool()
     def scene_observer(ctx: Context) -> Dict[str, Any]:
         """
-        Retrieves the current Unity game scene during Play Mode to help the AI agent "see" and understand all visible UI elements and interactive objects.
+        Captures a screenshot of the current Unity game scene.
 
         Returns:
-          A dictionary with the operation results ('success', 'message', 'data').
+          A dictionary with operation results ('success', 'data', 'error').
         """
         try:
             response = send_command_with_retry("scene_observer", {})

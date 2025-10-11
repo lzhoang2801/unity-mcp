@@ -9,7 +9,6 @@ def register_input_simulation_tools(mcp: FastMCP):
     def input_simulation(
         ctx: Context,
         action: str,
-        instanceID: int = None,
         clickCount: int = 1,
         x: float = None,
         y: float = None,
@@ -26,13 +25,10 @@ def register_input_simulation_tools(mcp: FastMCP):
 
         Args:
           action: The simulation action to perform (e.g., 'click').
-          instanceID: Use this to make the action directed at the correct gameObject. This is the
-            preferred and most reliable way to target a gameObject. For scroll actions,
-            this must be the ID of the scrollable container (e.g., a ScrollView),
-            not the gameObject you are trying to act on.
           clickCount: The number of times to click the target. Defaults to 1.
-          x/y: The screen coordinates for the action if instanceID is not provided.
-            For scroll actions, this must be a point within the scrollable area.
+          x/y: The screen coordinates for the action.
+            For click actions: x,y are the click coordinates.
+            For scroll actions: x,y are the scroll position coordinates.
           sx/sy: The starting screen coordinates for a drag operation.
           ex/ey: The ending screen coordinates for a drag operation.
           dx/dy: The scroll delta for the scroll action.
@@ -43,7 +39,6 @@ def register_input_simulation_tools(mcp: FastMCP):
 
         params = {
             "action": action,
-            "instanceID": instanceID,
             "clickCount": clickCount,
             "x": x,
             "y": y,
