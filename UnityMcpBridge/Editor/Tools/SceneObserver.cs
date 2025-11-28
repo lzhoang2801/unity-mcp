@@ -1,20 +1,22 @@
 using UnityEngine;
 using UnityEditor;
 using Newtonsoft.Json.Linq;
-using MCPForUnity.Editor.Helpers;
 using System;
-using System.IO;
+using MCPForUnity.Editor.Helpers;
+using System.Collections;
+using System.Threading.Tasks;
 
 namespace MCPForUnity.Editor.Tools
 {
     /// <summary>
     /// Handles scene screenshot capture.
     /// </summary>
-    public class SceneObserver : MonoBehaviour
+    public static class SceneObserver
     {
-        private static readonly string SCREENSHOT_DIR = Path.Combine(Application.dataPath, "..", "Screenshots");
+        private const int SuperSize = 1;
+        private static SceneObserverRunner _runner;
 
-        public static object HandleCommand(JObject @params)
+        public static async Task<object> HandleCommand(JObject @params)
         {
             if (!EditorApplication.isPlaying)
             {
@@ -23,7 +25,8 @@ namespace MCPForUnity.Editor.Tools
 
             try
             {
-                return Response.Success("Scene captured successfully.", CaptureScene());
+                var data = await GetRunner().CaptureSceneAsync();
+                return Response.Success("Scene captured successfully.", data);
             }
             catch (Exception ex)
             {
@@ -31,47 +34,61 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        public static object CaptureScene()
+        private static SceneObserverRunner GetRunner()
         {
-            var tex = ScreenCapture.CaptureScreenshotAsTexture();
-            var data = tex.EncodeToPNG();
-            var base64 = Convert.ToBase64String(data);
-            var result = SaveScreenshot(data);
-            
-            UnityEngine.Object.DestroyImmediate(tex);
-            
-            return new
+            if (_runner != null)
             {
-                screenshot = base64,
-                width = Screen.width,
-                height = Screen.height,
-                timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-                saved = result.success,
-                filePath = result.filePath
+                return _runner;
+            }
+
+            var runnerObject = new GameObject("[SceneObserverRunner]")
+            {
+                hideFlags = HideFlags.HideAndDontSave
             };
+            UnityEngine.Object.DontDestroyOnLoad(runnerObject);
+            _runner = runnerObject.AddComponent<SceneObserverRunner>();
+            return _runner;
         }
 
-        private static (bool success, string filePath) SaveScreenshot(byte[] data)
+        private class SceneObserverRunner : MonoBehaviour
         {
-            try
+            public Task<object> CaptureSceneAsync()
             {
-                if (!Directory.Exists(SCREENSHOT_DIR))
-                {
-                    Directory.CreateDirectory(SCREENSHOT_DIR);
-                }
-                
-                var time = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff");
-                var name = $"{time}.png";
-                var path = Path.Combine(SCREENSHOT_DIR, name);
-                
-                File.WriteAllBytes(path, data);
-                
-                return (true, path);
+                var tcs = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+                StartCoroutine(CaptureSceneRoutine(tcs));
+                return tcs.Task;
             }
-            catch (Exception ex)
+
+            private IEnumerator CaptureSceneRoutine(TaskCompletionSource<object> tcs)
             {
-                Debug.LogError($"Failed to save scene screenshot: {ex.Message}");
-                return (false, null);
+                yield return new WaitForEndOfFrame();
+
+                Texture2D screenshot = null;
+
+                try
+                {
+                    screenshot = ScreenCapture.CaptureScreenshotAsTexture(SuperSize);
+                    var data = screenshot.EncodeToPNG();
+                    var base64 = Convert.ToBase64String(data);
+
+                    tcs.SetResult(new
+                    {
+                        screenshot = base64,
+                        width = screenshot.width,
+                        height = screenshot.height
+                    });
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+                finally
+                {
+                    if (screenshot != null)
+                    {
+                        Destroy(screenshot);
+                    }
+                }
             }
         }
     }

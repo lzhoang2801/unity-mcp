@@ -9,7 +9,7 @@ from .manage_shader import register_manage_shader_tools
 from .read_console import register_read_console_tools
 from .manage_menu_item import register_manage_menu_item_tools
 from .resource_tools import register_resource_tools
-from .input_simulation import register_input_simulation_tools
+from .input_simulator import register_input_simulator_tools
 from .scene_observer import register_scene_observer_tools
 
 logger = logging.getLogger("mcp-for-unity-server")
@@ -28,6 +28,6 @@ def register_all_tools(mcp):
     #register_read_console_tools(mcp)
     #register_manage_menu_item_tools(mcp)
     #register_resource_tools(mcp)
-    register_input_simulation_tools(mcp)
+    register_input_simulator_tools(mcp)
     register_scene_observer_tools(mcp)
     logger.info("MCP for Unity Server tool registration complete.")

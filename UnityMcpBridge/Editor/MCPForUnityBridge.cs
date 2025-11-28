@@ -1076,11 +1076,11 @@ namespace MCPForUnity.Editor
                     case "manage_menu_item":
                         result = ManageMenuItem.HandleCommand(paramsObject);
                         break;
-                    case "input_simulation":
-                        result = await InputSimulation.HandleCommand(paramsObject);
+                    case "input_simulator":
+                        result = await InputSimulator.HandleCommand(paramsObject);
                         break;
                     case "scene_observer":
-                        result = SceneObserver.HandleCommand(paramsObject);
+                        result = await SceneObserver.HandleCommand(paramsObject);
                         break;
                     default:
                         throw new ArgumentException(
